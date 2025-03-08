@@ -2,6 +2,8 @@
 
 A modern expense tracking application that uses OCR to automatically extract information from receipts and provides natural language querying capabilities.
 
+> **Note:** This is a personal project that I use to track my own expenses. It's designed according to my specific needs and workflow.
+
 ## Features
 
 - 📸 Receipt scanning with automatic item and price detection
