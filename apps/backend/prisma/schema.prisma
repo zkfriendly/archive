@@ -8,13 +8,16 @@ datasource db {
 }
 
 model Receipt {
-    id          String   @id @default(cuid())
-    imageUrl    String
-    totalAmount Float
-    date        DateTime
-    items       Item[]
-    createdAt   DateTime @default(now())
-    updatedAt   DateTime @updatedAt
+    id           String   @id @default(cuid())
+    imageUrl     String
+    rawImagePath String // Path to the stored raw image
+    totalAmount  Float
+    date         DateTime
+    items        Item[]
+    shop         Shop?    @relation(fields: [shopId], references: [id])
+    shopId       String?
+    createdAt    DateTime @default(now())
+    updatedAt    DateTime @updatedAt
 }
 
 model Item {
@@ -36,4 +39,13 @@ model Category {
     items     Item[]
     createdAt DateTime @default(now())
     updatedAt DateTime @updatedAt
+}
+
+model Shop {
+    id        String    @id @default(cuid())
+    name      String    @unique
+    address   String?
+    receipts  Receipt[]
+    createdAt DateTime  @default(now())
+    updatedAt DateTime  @updatedAt
 }

@@ -1,3 +1,4 @@
+import React from 'react';
 import {
     Box,
     Grid,
@@ -17,8 +18,10 @@ import {
     Tr,
     Th,
     Td,
+    Button,
 } from '@chakra-ui/react';
 import { useQuery } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import axios from 'axios';
 
 interface Receipt {
@@ -33,9 +36,14 @@ interface Receipt {
             name: string;
         };
     }>;
+    shop?: {
+        id: string;
+        name: string;
+        address?: string;
+    };
 }
 
-const Dashboard = () => {
+const Dashboard: React.FC = () => {
     const { data: receipts, isLoading } = useQuery<Receipt[]>({
         queryKey: ['receipts'],
         queryFn: async () => {
@@ -104,7 +112,9 @@ const Dashboard = () => {
                                     <Tr>
                                         <Th>Date</Th>
                                         <Th>Items</Th>
+                                        <Th>Shop</Th>
                                         <Th isNumeric>Total</Th>
+                                        <Th>Actions</Th>
                                     </Tr>
                                 </Thead>
                                 <Tbody>
@@ -112,7 +122,18 @@ const Dashboard = () => {
                                         <Tr key={receipt.id}>
                                             <Td>{new Date(receipt.date).toLocaleDateString()}</Td>
                                             <Td>{receipt.items.length} items</Td>
+                                            <Td>{receipt.shop?.name || "Unknown Shop"}</Td>
                                             <Td isNumeric>${receipt.totalAmount.toFixed(2)}</Td>
+                                            <Td>
+                                                <Button
+                                                    as={Link}
+                                                    to={`/receipts/${receipt.id}`}
+                                                    size="sm"
+                                                    colorScheme="blue"
+                                                >
+                                                    View Details
+                                                </Button>
+                                            </Td>
                                         </Tr>
                                     ))}
                                 </Tbody>

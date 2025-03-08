@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard';
 import UploadReceipt from './pages/UploadReceipt';
 import Categories from './pages/Categories';
 import Insights from './pages/Insights';
+import ReceiptDetail from './pages/ReceiptDetail';
 
 const queryClient = new QueryClient({
     defaultOptions: {
@@ -25,9 +26,11 @@ function App() {
                     <Layout>
                         <Routes>
                             <Route path="/" element={<Dashboard />} />
+                            <Route path="/dashboard" element={<Dashboard />} />
                             <Route path="/upload" element={<UploadReceipt />} />
                             <Route path="/categories" element={<Categories />} />
                             <Route path="/insights" element={<Insights />} />
+                            <Route path="/receipts/:id" element={<ReceiptDetail />} />
                         </Routes>
                     </Layout>
                 </Router>

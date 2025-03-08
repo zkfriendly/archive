@@ -5,6 +5,7 @@ import path from 'path';
 import { createWorker } from 'tesseract.js';
 import { Anthropic } from '@anthropic-ai/sdk';
 import { z } from 'zod';
+import fs from 'fs';
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -28,6 +29,10 @@ const upload = multer({ storage });
 const receiptSchema = z.object({
     date: z.string(),
     totalAmount: z.number(),
+    shop: z.object({
+        name: z.string(),
+        address: z.string().optional(),
+    }),
     items: z.array(z.object({
         name: z.string(),
         price: z.number(),
@@ -50,6 +55,10 @@ async function parseReceiptText(text: string) {
     const existingCategories = await prisma.category.findMany();
     const categoryNames = existingCategories.map(c => c.name).join(', ');
 
+    // Get existing shops to provide as examples
+    const existingShops = await prisma.shop.findMany();
+    const shopNames = existingShops.map(s => s.name).join(', ');
+
     const message = await anthropic.messages.create({
         model: "claude-3-7-sonnet-20250219",
         max_tokens: 1024,
@@ -61,6 +70,10 @@ Receipt schema:
 {
   "date": "YYYY-MM-DD", // Required: Must be a valid date string
   "totalAmount": 123.45, // Required: Must be a number
+  "shop": {
+    "name": "Shop Name", // Required: String
+    "address": "Shop Address" // Optional: String
+  },
   "items": [ // Required: Array of items
     {
       "name": "Item name", // Required: String
@@ -72,10 +85,12 @@ Receipt schema:
 }
 
 Existing categories in our system: ${categoryNames || "Groceries, Electronics, Clothing, Restaurant, Household, Miscellaneous"}
+Existing shops in our system: ${shopNames || "None yet"}
 
 If you cannot determine a specific field, use a reasonable default:
 - For missing date, use today's date
 - For missing total, sum the prices of all items
+- For missing shop name, use "Unknown Shop"
 - For missing category, classify based on the item name using one of our existing categories
 - Always include all required fields
 
@@ -99,6 +114,10 @@ Do not include any markdown formatting, explanations, or additional text.`
             date: parsedJson.date || new Date().toISOString().split('T')[0],
             totalAmount: parsedJson.totalAmount ||
                 (parsedJson.items?.reduce((sum: number, item: any) => sum + (item.price || 0), 0) || 0),
+            shop: {
+                name: parsedJson.shop?.name || "Unknown Shop",
+                address: parsedJson.shop?.address || null
+            },
             items: (parsedJson.items || []).map((item: any) => ({
                 name: item.name || "Unknown Item",
                 price: item.price || 0,
@@ -122,6 +141,14 @@ router.post('/', upload.single('receipt'), async (req, res) => {
             return res.status(400).json({ error: 'No file uploaded' });
         }
 
+        // Store the raw image
+        const uploadDir = path.join(__dirname, '..', '..', process.env.UPLOAD_DIR || 'uploads');
+        const rawImageFilename = `raw-${req.file.filename}`;
+        const rawImagePath = path.join(uploadDir, rawImageFilename);
+
+        // Copy the uploaded file to create a raw image backup
+        fs.copyFileSync(req.file.path, rawImagePath);
+
         const text = await processReceiptImage(req.file.path);
         const parsedData = await parseReceiptText(text);
 
@@ -129,12 +156,37 @@ router.post('/', upload.single('receipt'), async (req, res) => {
         const existingCategories = await prisma.category.findMany();
         const categoryMap = new Map(existingCategories.map(cat => [cat.name.toLowerCase(), cat.id]));
 
+        // Find or create shop
+        let shop = null;
+        if (parsedData.shop.name !== "Unknown Shop") {
+            shop = await prisma.shop.findUnique({
+                where: { name: parsedData.shop.name }
+            });
+
+            if (!shop) {
+                shop = await prisma.shop.create({
+                    data: {
+                        name: parsedData.shop.name,
+                        address: parsedData.shop.address
+                    }
+                });
+            } else if (parsedData.shop.address && !shop.address) {
+                // Update shop with address if it was missing before
+                shop = await prisma.shop.update({
+                    where: { id: shop.id },
+                    data: { address: parsedData.shop.address }
+                });
+            }
+        }
+
         // Create receipt and items in database
         const receipt = await prisma.receipt.create({
             data: {
                 imageUrl: `/uploads/${req.file.filename}`,
+                rawImagePath: `/uploads/${rawImageFilename}`,
                 date: new Date(parsedData.date),
                 totalAmount: parsedData.totalAmount,
+                shopId: shop?.id,
                 items: {
                     create: await Promise.all(parsedData.items.map(async (item) => {
                         let categoryId: string;
@@ -184,6 +236,7 @@ router.post('/', upload.single('receipt'), async (req, res) => {
                         category: true,
                     },
                 },
+                shop: true,
             },
         });
 
@@ -204,6 +257,7 @@ router.get('/', async (req, res) => {
                         category: true,
                     },
                 },
+                shop: true,
             },
             orderBy: {
                 date: 'desc',
@@ -226,6 +280,7 @@ router.get('/:id', async (req, res) => {
                         category: true,
                     },
                 },
+                shop: true,
             },
         });
 
