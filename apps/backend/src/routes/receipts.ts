@@ -39,8 +39,6 @@ const receiptSchema = z.object({
 // Process receipt image and extract data
 async function processReceiptImage(imagePath: string) {
     const worker = await createWorker();
-    await worker.loadLanguage('eng');
-    await worker.initialize('eng');
     const { data: { text } } = await worker.recognize(imagePath);
     await worker.terminate();
     return text;
@@ -48,28 +46,72 @@ async function processReceiptImage(imagePath: string) {
 
 // Use Claude to parse receipt text and extract structured data
 async function parseReceiptText(text: string) {
+    // Get existing categories to provide as examples
+    const existingCategories = await prisma.category.findMany();
+    const categoryNames = existingCategories.map(c => c.name).join(', ');
+
     const message = await anthropic.messages.create({
-        model: 'claude-3-sonnet-20240229',
+        model: "claude-3-7-sonnet-20250219",
         max_tokens: 1024,
         messages: [{
             role: 'user',
             content: `Extract the following information from this receipt text in JSON format:
-      - date
-      - total amount
-      - items (array of objects with name, price, and suggested category)
-      
-      Receipt text:
-      ${text}
-      
-      Return only valid JSON.`
+
+Receipt schema:
+{
+  "date": "YYYY-MM-DD", // Required: Must be a valid date string
+  "totalAmount": 123.45, // Required: Must be a number
+  "items": [ // Required: Array of items
+    {
+      "name": "Item name", // Required: String
+      "price": 12.34, // Required: Number
+      "quantity": 1, // Optional: Number (defaults to 1)
+      "category": "Category name" // Required: String matching one of our existing categories when possible
+    }
+  ]
+}
+
+Existing categories in our system: ${categoryNames || "Groceries, Electronics, Clothing, Restaurant, Household, Miscellaneous"}
+
+If you cannot determine a specific field, use a reasonable default:
+- For missing date, use today's date
+- For missing total, sum the prices of all items
+- For missing category, classify based on the item name using one of our existing categories
+- Always include all required fields
+
+Receipt text:
+${text}
+
+Return ONLY valid JSON matching the schema above.
+Do not include any markdown formatting, explanations, or additional text.`
         }],
     });
 
+    // Handle potential markdown formatting in the response
+    let jsonStr = message.content[0].text;
+    jsonStr = jsonStr.replace(/```json\s*|\s*```/g, '').trim();
+
     try {
-        const jsonStr = message.content[0].text;
-        return receiptSchema.parse(JSON.parse(jsonStr));
+        const parsedJson = JSON.parse(jsonStr);
+
+        // Ensure all required fields exist with fallbacks
+        const validatedData = {
+            date: parsedJson.date || new Date().toISOString().split('T')[0],
+            totalAmount: parsedJson.totalAmount ||
+                (parsedJson.items?.reduce((sum: number, item: any) => sum + (item.price || 0), 0) || 0),
+            items: (parsedJson.items || []).map((item: any) => ({
+                name: item.name || "Unknown Item",
+                price: item.price || 0,
+                quantity: item.quantity || 1,
+                category: item.category || "Miscellaneous"
+            }))
+        };
+
+        return receiptSchema.parse(validatedData);
     } catch (error) {
-        throw new Error('Failed to parse receipt data');
+        console.error("Error parsing JSON from Claude:", error);
+        console.log("Raw response:", jsonStr);
+        throw new Error("Failed to parse receipt data");
     }
 }
 
@@ -83,6 +125,10 @@ router.post('/', upload.single('receipt'), async (req, res) => {
         const text = await processReceiptImage(req.file.path);
         const parsedData = await parseReceiptText(text);
 
+        // Pre-fetch all categories to avoid multiple database queries
+        const existingCategories = await prisma.category.findMany();
+        const categoryMap = new Map(existingCategories.map(cat => [cat.name.toLowerCase(), cat.id]));
+
         // Create receipt and items in database
         const receipt = await prisma.receipt.create({
             data: {
@@ -91,18 +137,43 @@ router.post('/', upload.single('receipt'), async (req, res) => {
                 totalAmount: parsedData.totalAmount,
                 items: {
                     create: await Promise.all(parsedData.items.map(async (item) => {
-                        // Get or create category
-                        const category = await prisma.category.upsert({
-                            where: { name: item.category },
-                            create: { name: item.category },
-                            update: {},
-                        });
+                        let categoryId: string;
+                        const normalizedCategoryName = item.category.toLowerCase();
+
+                        // Check if category already exists
+                        if (categoryMap.has(normalizedCategoryName)) {
+                            const id = categoryMap.get(normalizedCategoryName);
+                            if (id) {
+                                categoryId = id;
+                            } else {
+                                // Fallback if somehow the ID is undefined
+                                let defaultCategory = await prisma.category.findFirst({
+                                    where: { name: "Miscellaneous" }
+                                });
+
+                                if (!defaultCategory) {
+                                    defaultCategory = await prisma.category.create({
+                                        data: { name: "Miscellaneous" }
+                                    });
+                                }
+
+                                categoryId = defaultCategory.id;
+                            }
+                        } else {
+                            // Create new category if it doesn't exist
+                            const newCategory = await prisma.category.create({
+                                data: { name: item.category }
+                            });
+                            categoryId = newCategory.id;
+                            // Update our local map
+                            categoryMap.set(normalizedCategoryName, newCategory.id);
+                        }
 
                         return {
                             name: item.name,
                             price: item.price,
                             quantity: item.quantity || 1,
-                            categoryId: category.id,
+                            categoryId: categoryId,
                         };
                     })),
                 },
