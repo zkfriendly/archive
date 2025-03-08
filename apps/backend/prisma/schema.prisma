@@ -1,0 +1,39 @@
+generator client {
+    provider = "prisma-client-js"
+}
+
+datasource db {
+    provider = "postgresql"
+    url      = env("DATABASE_URL")
+}
+
+model Receipt {
+    id          String   @id @default(cuid())
+    imageUrl    String
+    totalAmount Float
+    date        DateTime
+    items       Item[]
+    createdAt   DateTime @default(now())
+    updatedAt   DateTime @updatedAt
+}
+
+model Item {
+    id         String   @id @default(cuid())
+    name       String
+    price      Float
+    quantity   Int      @default(1)
+    receipt    Receipt  @relation(fields: [receiptId], references: [id])
+    receiptId  String
+    category   Category @relation(fields: [categoryId], references: [id])
+    categoryId String
+    createdAt  DateTime @default(now())
+    updatedAt  DateTime @updatedAt
+}
+
+model Category {
+    id        String   @id @default(cuid())
+    name      String   @unique
+    items     Item[]
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+}
