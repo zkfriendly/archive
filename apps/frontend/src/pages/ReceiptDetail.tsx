@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
@@ -63,7 +63,8 @@ import {
     CheckIcon,
     CloseIcon,
     RepeatIcon,
-    ChevronDownIcon
+    ChevronDownIcon,
+    ViewIcon,
 } from '@chakra-ui/icons';
 
 interface Item {
@@ -111,11 +112,32 @@ const ReceiptDetail: React.FC = () => {
     const [itemToDelete, setItemToDelete] = useState<string | null>(null);
     const [isSaving, setIsSaving] = useState(false);
     const [saveTimeout, setSaveTimeout] = useState<ReturnType<typeof setTimeout> | null>(null);
+    const [showImage, setShowImage] = useState(false);
+    const [imageError, setImageError] = useState(false);
+    const [imageLoading, setImageLoading] = useState(false);
 
     const deleteAlertDisclosure = useDisclosure();
     const recalculateDisclosure = useDisclosure();
     const deleteReceiptDisclosure = useDisclosure();
     const cancelRef = React.useRef<HTMLButtonElement>(null);
+
+    // Helper function to ensure URLs are correctly formatted
+    const getFullUrl = (path: string) => {
+        if (!path) return '';
+        // If path already starts with http or https, return as is
+        if (path.startsWith('http')) return path;
+
+        // If path starts with /uploads, prepend the backend URL
+        if (path.includes('/uploads')) {
+            // Extract from vite.config.ts proxy settings
+            const backendUrl = 'http://localhost:3000';
+            return `${backendUrl}${path.startsWith('/') ? path : `/${path}`}`;
+        }
+
+        // For API paths, keep as is (they're proxied by Vite)
+        const formattedPath = path.startsWith('/') ? path : `/${path}`;
+        return formattedPath;
+    };
 
     // Fetch receipt data
     const { data: receipt, isLoading, error } = useQuery<Receipt>({
@@ -125,6 +147,20 @@ const ReceiptDetail: React.FC = () => {
             return response.data;
         },
     });
+
+    // Reset image states when receipt changes
+    useEffect(() => {
+        if (receipt) {
+            setImageError(false);
+            setImageLoading(false);
+            console.log('Receipt image URLs:', {
+                imageUrl: receipt.imageUrl,
+                rawImagePath: receipt.rawImagePath,
+                formattedImageUrl: getFullUrl(receipt.imageUrl),
+                formattedRawImagePath: getFullUrl(receipt.rawImagePath)
+            });
+        }
+    }, [receipt?.id]);
 
     // Fetch categories for dropdown
     const { data: categories } = useQuery<Category[]>({
@@ -391,317 +427,376 @@ const ReceiptDetail: React.FC = () => {
 
     return (
         <VStack spacing={6} align="stretch">
-            <Flex justify="space-between" align="center">
-                <HStack>
-                    <Heading size="lg">Receipt Details</Heading>
-                    {isEditing && (
-                        <Badge colorScheme="blue" fontSize="md" variant="solid" px={2} py={1}>
-                            Editing Mode
-                        </Badge>
-                    )}
-                </HStack>
-                <HStack spacing={3}>
-                    {isSaving && (
-                        <HStack spacing={2}>
-                            <Spinner size="sm" color="blue.500" />
-                            <Text fontSize="sm" color="blue.500">Saving changes...</Text>
-                        </HStack>
-                    )}
-
-                    <Tooltip label={isEditing ? "Done editing" : "Edit receipt"}>
+            {isLoading ? (
+                <Flex justify="center" align="center" height="50vh">
+                    <VStack spacing={4}>
+                        <Spinner size="xl" color="blue.500" />
+                        <Text>Loading receipt details...</Text>
+                    </VStack>
+                </Flex>
+            ) : error ? (
+                <Flex justify="center" align="center" height="50vh">
+                    <VStack spacing={4}>
+                        <Text color="red.500" fontSize="lg">Error loading receipt details</Text>
                         <Button
-                            leftIcon={isEditing ? <CheckIcon /> : <EditIcon />}
-                            size="sm"
-                            onClick={handleEditToggle}
-                            colorScheme={isEditing ? "green" : "blue"}
-                            isLoading={updateReceiptMutation.isPending}
+                            colorScheme="blue"
+                            onClick={() => window.location.reload()}
                         >
-                            {isEditing ? "Done" : "Edit"}
+                            Retry
                         </Button>
-                    </Tooltip>
-
-                    <Menu>
-                        <MenuButton as={Button} rightIcon={<ChevronDownIcon />} size="sm" variant="outline">
-                            Actions
-                        </MenuButton>
-                        <MenuList>
-                            <MenuItem
-                                icon={<RepeatIcon />}
-                                onClick={recalculateDisclosure.onOpen}
-                            >
-                                Recalculate from image
-                            </MenuItem>
-                            <MenuItem
-                                icon={<DeleteIcon />}
-                                onClick={deleteReceiptDisclosure.onOpen}
-                                color="red.500"
-                            >
-                                Delete receipt
-                            </MenuItem>
-                        </MenuList>
-                    </Menu>
-
-                    <Button as={Link} to="/dashboard" size="sm" variant="outline">
-                        Back
-                    </Button>
-                </HStack>
-            </Flex>
-
-            <Card borderWidth={isEditing ? "2px" : "1px"} borderColor={isEditing ? "blue.400" : "gray.200"}>
-                <CardBody>
-                    <HStack spacing={6} align="flex-start">
-                        <Box flex="1">
-                            <VStack align="stretch" spacing={4}>
-                                <Box>
-                                    <Text fontWeight="bold">Date</Text>
-                                    {isEditing ? (
-                                        <Input
-                                            type="date"
-                                            value={new Date(editedReceipt.date).toISOString().split('T')[0]}
-                                            onChange={(e) => {
-                                                const updatedReceipt = {
-                                                    ...editedReceipt,
-                                                    date: new Date(e.target.value).toISOString()
-                                                };
-                                                setEditedReceipt(updatedReceipt);
-                                                debouncedSave(updatedReceipt);
-                                            }}
-                                            size="sm"
-                                        />
-                                    ) : (
-                                        <Text>{new Date(receipt.date).toLocaleDateString()}</Text>
-                                    )}
-                                </Box>
-
-                                <Box>
-                                    <Text fontWeight="bold">Total Amount</Text>
-                                    <Text fontSize="xl" fontWeight="bold">
-                                        ${editedReceipt.items.reduce((sum, item) => sum + (item.price * item.quantity), 0).toFixed(2)}
-                                    </Text>
-                                    <Text fontSize="xs" color="gray.500">
-                                        (Calculated from items)
-                                    </Text>
-                                </Box>
-
-                                {(receipt.shop || isEditing) && (
-                                    <Box>
-                                        <Text fontWeight="bold">Shop</Text>
-                                        {isEditing ? (
-                                            <Input
-                                                value={editedReceipt.shop?.name || ''}
-                                                onChange={(e) => {
-                                                    const updatedReceipt = {
-                                                        ...editedReceipt,
-                                                        shop: {
-                                                            ...(editedReceipt.shop || { id: '', name: '' }),
-                                                            name: e.target.value
-                                                        }
-                                                    };
-                                                    setEditedReceipt(updatedReceipt);
-                                                    debouncedSave(updatedReceipt);
-                                                }}
-                                                placeholder="Shop name"
-                                                size="sm"
-                                                mb={2}
-                                            />
-                                        ) : (
-                                            <Text>{receipt.shop?.name || 'Unknown Shop'}</Text>
-                                        )}
-
-                                        {isEditing ? (
-                                            <Input
-                                                value={editedReceipt.shop?.address || ''}
-                                                onChange={(e) => {
-                                                    const updatedReceipt = {
-                                                        ...editedReceipt,
-                                                        shop: {
-                                                            ...(editedReceipt.shop || { id: '', name: '' }),
-                                                            address: e.target.value
-                                                        }
-                                                    };
-                                                    setEditedReceipt(updatedReceipt);
-                                                    debouncedSave(updatedReceipt);
-                                                }}
-                                                placeholder="Shop address (optional)"
-                                                size="sm"
-                                            />
-                                        ) : (
-                                            receipt.shop?.address && <Text fontSize="sm">{receipt.shop.address}</Text>
-                                        )}
-                                    </Box>
-                                )}
-                            </VStack>
-                        </Box>
-
-                        <Box maxW="200px">
-                            <VStack>
-                                <Image
-                                    src={receipt.imageUrl}
-                                    alt="Receipt"
-                                    borderRadius="md"
-                                    maxH="200px"
-                                    fallbackSrc="https://via.placeholder.com/200x300?text=Receipt+Image"
-                                />
-                                <HStack>
-                                    <Button
-                                        as="a"
-                                        href={receipt.rawImagePath}
-                                        target="_blank"
-                                        size="sm"
-                                        rightIcon={<ExternalLinkIcon />}
-                                        variant="outline"
-                                    >
-                                        View Original
-                                    </Button>
+                    </VStack>
+                </Flex>
+            ) : (
+                <>
+                    <Flex justify="space-between" align="center">
+                        <HStack>
+                            <Heading size="lg">Receipt Details</Heading>
+                            {isEditing && (
+                                <Badge colorScheme="blue" fontSize="md" variant="solid" px={2} py={1}>
+                                    Editing Mode
+                                </Badge>
+                            )}
+                        </HStack>
+                        <HStack spacing={3}>
+                            {isSaving && (
+                                <HStack spacing={2}>
+                                    <Spinner size="sm" color="blue.500" />
+                                    <Text fontSize="sm" color="blue.500">Saving changes...</Text>
                                 </HStack>
-                            </VStack>
-                        </Box>
-                    </HStack>
-                </CardBody>
-            </Card>
+                            )}
 
-            <Card borderWidth={isEditing ? "2px" : "1px"} borderColor={isEditing ? "blue.400" : "gray.200"}>
-                <CardBody>
-                    <Flex justify="space-between" align="center" mb={4}>
-                        <Heading size="md">Items ({editedReceipt.items.length})</Heading>
-                        {isEditing && !newItem && (
-                            <Tooltip label="Add item">
+                            <Tooltip label={isEditing ? "Done editing" : "Edit receipt"}>
                                 <Button
-                                    leftIcon={<AddIcon />}
+                                    leftIcon={isEditing ? <CheckIcon /> : <EditIcon />}
                                     size="sm"
-                                    onClick={startAddingItem}
-                                    colorScheme="blue"
+                                    onClick={handleEditToggle}
+                                    colorScheme={isEditing ? "green" : "blue"}
+                                    isLoading={updateReceiptMutation.isPending}
                                 >
-                                    Add Item
+                                    {isEditing ? "Done" : "Edit"}
                                 </Button>
                             </Tooltip>
-                        )}
+
+                            <Menu>
+                                <MenuButton as={Button} rightIcon={<ChevronDownIcon />} size="sm" variant="outline">
+                                    Actions
+                                </MenuButton>
+                                <MenuList>
+                                    <MenuItem
+                                        icon={<RepeatIcon />}
+                                        onClick={recalculateDisclosure.onOpen}
+                                    >
+                                        Recalculate from image
+                                    </MenuItem>
+                                    <MenuItem
+                                        icon={<DeleteIcon />}
+                                        onClick={deleteReceiptDisclosure.onOpen}
+                                        color="red.500"
+                                    >
+                                        Delete receipt
+                                    </MenuItem>
+                                </MenuList>
+                            </Menu>
+
+                            <Button as={Link} to="/dashboard" size="sm" variant="outline">
+                                Back
+                            </Button>
+                        </HStack>
                     </Flex>
 
-                    {newItem && (
-                        <Box mb={4} p={3} borderWidth="1px" borderRadius="md" borderStyle="dashed">
-                            <Flex justify="space-between" align="center" mb={2}>
-                                <Text fontWeight="bold">New Item</Text>
-                                <IconButton
-                                    aria-label="Cancel"
-                                    icon={<CloseIcon />}
-                                    size="xs"
-                                    onClick={cancelAddItem}
-                                    variant="ghost"
-                                />
-                            </Flex>
-                            <HStack spacing={3} mb={2}>
-                                <FormControl>
-                                    <FormLabel fontSize="xs">Name</FormLabel>
-                                    <Input
-                                        size="sm"
-                                        value={newItem.name || ''}
-                                        onChange={(e) => setNewItem({ ...newItem, name: e.target.value })}
-                                        placeholder="Item name"
-                                    />
-                                </FormControl>
-                                <FormControl>
-                                    <FormLabel fontSize="xs">Price</FormLabel>
-                                    <NumberInput
-                                        size="sm"
-                                        value={newItem.price || 0}
-                                        onChange={(_, value) => setNewItem({ ...newItem, price: value })}
-                                        min={0}
-                                        precision={2}
-                                        step={0.01}
-                                    >
-                                        <NumberInputField />
-                                        <NumberInputStepper>
-                                            <NumberIncrementStepper />
-                                            <NumberDecrementStepper />
-                                        </NumberInputStepper>
-                                    </NumberInput>
-                                </FormControl>
-                            </HStack>
-                            <HStack spacing={3}>
-                                <FormControl>
-                                    <FormLabel fontSize="xs">Quantity</FormLabel>
-                                    <NumberInput
-                                        size="sm"
-                                        value={newItem.quantity || 1}
-                                        onChange={(_, value) => setNewItem({ ...newItem, quantity: value })}
-                                        min={1}
-                                        step={1}
-                                    >
-                                        <NumberInputField />
-                                        <NumberInputStepper>
-                                            <NumberIncrementStepper />
-                                            <NumberDecrementStepper />
-                                        </NumberInputStepper>
-                                    </NumberInput>
-                                </FormControl>
-                                <FormControl>
-                                    <FormLabel fontSize="xs">Category</FormLabel>
-                                    <Select
-                                        size="sm"
-                                        value={newItem.categoryId || ''}
-                                        onChange={(e) => setNewItem({ ...newItem, categoryId: e.target.value })}
-                                    >
-                                        {categories?.map(category => (
-                                            <option key={category.id} value={category.id}>
-                                                {category.name}
-                                            </option>
-                                        ))}
-                                    </Select>
-                                </FormControl>
-                            </HStack>
-                            <Button
-                                mt={3}
-                                size="sm"
-                                colorScheme="blue"
-                                onClick={handleAddItem}
-                                isDisabled={!newItem.name}
-                                width="full"
-                            >
-                                Add Item
-                            </Button>
-                        </Box>
-                    )}
+                    <Card borderWidth={isEditing ? "2px" : "1px"} borderColor={isEditing ? "blue.400" : "gray.200"}>
+                        <CardBody>
+                            <HStack spacing={6} align="flex-start">
+                                <Box flex="1">
+                                    <VStack align="stretch" spacing={4}>
+                                        <Box>
+                                            <Text fontWeight="bold">Date</Text>
+                                            {isEditing ? (
+                                                <Input
+                                                    type="date"
+                                                    value={new Date(editedReceipt.date).toISOString().split('T')[0]}
+                                                    onChange={(e) => {
+                                                        const updatedReceipt = {
+                                                            ...editedReceipt,
+                                                            date: new Date(e.target.value).toISOString()
+                                                        };
+                                                        setEditedReceipt(updatedReceipt);
+                                                        debouncedSave(updatedReceipt);
+                                                    }}
+                                                    size="sm"
+                                                />
+                                            ) : (
+                                                <Text>{new Date(receipt.date).toLocaleDateString()}</Text>
+                                            )}
+                                        </Box>
 
-                    <Table variant="simple" size="sm">
-                        <Thead>
-                            <Tr>
-                                <Th>Item</Th>
-                                <Th>Category</Th>
-                                <Th isNumeric>Quantity</Th>
-                                <Th isNumeric>Price</Th>
-                                <Th isNumeric>Total</Th>
-                                {isEditing && <Th width="80px">Actions</Th>}
-                            </Tr>
-                        </Thead>
-                        <Tbody>
-                            {editedReceipt.items.map((item) => (
-                                <Tr key={item.id}>
-                                    <Td>
-                                        {isEditing ? (
+                                        <Box>
+                                            <Text fontWeight="bold">Total Amount</Text>
+                                            <Text fontSize="xl" fontWeight="bold">
+                                                ${editedReceipt.items.reduce((sum, item) => sum + (item.price * item.quantity), 0).toFixed(2)}
+                                            </Text>
+                                            <Text fontSize="xs" color="gray.500">
+                                                (Calculated from items)
+                                            </Text>
+                                        </Box>
+
+                                        {(receipt.shop || isEditing) && (
+                                            <Box>
+                                                <Text fontWeight="bold">Shop</Text>
+                                                {isEditing ? (
+                                                    <Input
+                                                        value={editedReceipt.shop?.name || ''}
+                                                        onChange={(e) => {
+                                                            const updatedReceipt = {
+                                                                ...editedReceipt,
+                                                                shop: {
+                                                                    ...(editedReceipt.shop || { id: '', name: '' }),
+                                                                    name: e.target.value
+                                                                }
+                                                            };
+                                                            setEditedReceipt(updatedReceipt);
+                                                            debouncedSave(updatedReceipt);
+                                                        }}
+                                                        placeholder="Shop name"
+                                                        size="sm"
+                                                        mb={2}
+                                                    />
+                                                ) : (
+                                                    <Text>{receipt.shop?.name || 'Unknown Shop'}</Text>
+                                                )}
+
+                                                {isEditing ? (
+                                                    <Input
+                                                        value={editedReceipt.shop?.address || ''}
+                                                        onChange={(e) => {
+                                                            const updatedReceipt = {
+                                                                ...editedReceipt,
+                                                                shop: {
+                                                                    ...(editedReceipt.shop || { id: '', name: '' }),
+                                                                    address: e.target.value
+                                                                }
+                                                            };
+                                                            setEditedReceipt(updatedReceipt);
+                                                            debouncedSave(updatedReceipt);
+                                                        }}
+                                                        placeholder="Shop address (optional)"
+                                                        size="sm"
+                                                    />
+                                                ) : (
+                                                    receipt.shop?.address && <Text fontSize="sm">{receipt.shop.address}</Text>
+                                                )}
+                                            </Box>
+                                        )}
+                                    </VStack>
+                                </Box>
+
+                                <Box maxW="200px">
+                                    <VStack>
+                                        {showImage && receipt ? (
+                                            <>
+                                                {imageLoading && (
+                                                    <Box
+                                                        height="200px"
+                                                        width="100%"
+                                                        display="flex"
+                                                        alignItems="center"
+                                                        justifyContent="center"
+                                                    >
+                                                        <Spinner color="blue.500" />
+                                                    </Box>
+                                                )}
+                                                {imageError ? (
+                                                    <Box
+                                                        height="200px"
+                                                        width="100%"
+                                                        borderWidth="1px"
+                                                        borderRadius="md"
+                                                        display="flex"
+                                                        flexDirection="column"
+                                                        alignItems="center"
+                                                        justifyContent="center"
+                                                        p={4}
+                                                    >
+                                                        <Text color="red.500" mb={2}>Failed to load image</Text>
+                                                        <Button
+                                                            size="xs"
+                                                            onClick={() => {
+                                                                setImageError(false);
+                                                                setImageLoading(true);
+                                                            }}
+                                                        >
+                                                            Retry
+                                                        </Button>
+                                                    </Box>
+                                                ) : receipt.imageUrl ? (
+                                                    <Image
+                                                        src={getFullUrl(receipt.imageUrl)}
+                                                        alt="Receipt"
+                                                        borderRadius="md"
+                                                        maxH="200px"
+                                                        display={imageLoading ? "none" : "block"}
+                                                        fallbackSrc="https://via.placeholder.com/200x300?text=Receipt+Image+Not+Available"
+                                                        onError={(e) => {
+                                                            console.error("Error loading receipt image:", e);
+                                                            setImageError(true);
+                                                            setImageLoading(false);
+                                                        }}
+                                                        onLoad={() => {
+                                                            setImageLoading(false);
+                                                            setImageError(false);
+                                                        }}
+                                                    />
+                                                ) : (
+                                                    <Box
+                                                        height="200px"
+                                                        width="100%"
+                                                        borderWidth="1px"
+                                                        borderRadius="md"
+                                                        display="flex"
+                                                        alignItems="center"
+                                                        justifyContent="center"
+                                                        p={4}
+                                                    >
+                                                        <Text color="gray.500">No image available</Text>
+                                                    </Box>
+                                                )}
+                                                <HStack>
+                                                    {receipt.rawImagePath && (
+                                                        <Button
+                                                            as="a"
+                                                            href={getFullUrl(receipt.rawImagePath)}
+                                                            target="_blank"
+                                                            size="sm"
+                                                            rightIcon={<ExternalLinkIcon />}
+                                                            variant="outline"
+                                                        >
+                                                            View Original
+                                                        </Button>
+                                                    )}
+                                                    <Button
+                                                        size="sm"
+                                                        onClick={() => setShowImage(false)}
+                                                        variant="outline"
+                                                        colorScheme="gray"
+                                                    >
+                                                        Hide Image
+                                                    </Button>
+                                                </HStack>
+                                            </>
+                                        ) : (
+                                            <Box
+                                                borderWidth="1px"
+                                                borderRadius="md"
+                                                p={4}
+                                                textAlign="center"
+                                                borderStyle="dashed"
+                                                borderColor="gray.300"
+                                                width="100%"
+                                            >
+                                                <VStack spacing={3}>
+                                                    <Text color="gray.500">Receipt image hidden</Text>
+                                                    <Button
+                                                        size="sm"
+                                                        onClick={() => {
+                                                            setShowImage(true);
+                                                            setImageLoading(true);
+                                                            setImageError(false);
+                                                        }}
+                                                        leftIcon={<ViewIcon />}
+                                                        colorScheme="blue"
+                                                    >
+                                                        Show Receipt Image
+                                                    </Button>
+                                                </VStack>
+                                            </Box>
+                                        )}
+                                    </VStack>
+                                </Box>
+                            </HStack>
+                        </CardBody>
+                    </Card>
+
+                    <Card borderWidth={isEditing ? "2px" : "1px"} borderColor={isEditing ? "blue.400" : "gray.200"}>
+                        <CardBody>
+                            <Flex justify="space-between" align="center" mb={4}>
+                                <Heading size="md">Items ({editedReceipt.items.length})</Heading>
+                                {isEditing && !newItem && (
+                                    <Tooltip label="Add item">
+                                        <Button
+                                            leftIcon={<AddIcon />}
+                                            size="sm"
+                                            onClick={startAddingItem}
+                                            colorScheme="blue"
+                                        >
+                                            Add Item
+                                        </Button>
+                                    </Tooltip>
+                                )}
+                            </Flex>
+
+                            {newItem && (
+                                <Box mb={4} p={3} borderWidth="1px" borderRadius="md" borderStyle="dashed">
+                                    <Flex justify="space-between" align="center" mb={2}>
+                                        <Text fontWeight="bold">New Item</Text>
+                                        <IconButton
+                                            aria-label="Cancel"
+                                            icon={<CloseIcon />}
+                                            size="xs"
+                                            onClick={cancelAddItem}
+                                            variant="ghost"
+                                        />
+                                    </Flex>
+                                    <HStack spacing={3} mb={2}>
+                                        <FormControl>
+                                            <FormLabel fontSize="xs">Name</FormLabel>
                                             <Input
                                                 size="sm"
-                                                value={item.name}
-                                                onChange={(e) => handleItemChange(item.id, 'name', e.target.value)}
+                                                value={newItem.name || ''}
+                                                onChange={(e) => setNewItem({ ...newItem, name: e.target.value })}
+                                                placeholder="Item name"
                                             />
-                                        ) : (
-                                            <Text>{item.name}</Text>
-                                        )}
-                                    </Td>
-                                    <Td>
-                                        {isEditing ? (
+                                        </FormControl>
+                                        <FormControl>
+                                            <FormLabel fontSize="xs">Price</FormLabel>
+                                            <NumberInput
+                                                size="sm"
+                                                value={newItem.price || 0}
+                                                onChange={(_, value) => setNewItem({ ...newItem, price: value })}
+                                                min={0}
+                                                precision={2}
+                                                step={0.01}
+                                            >
+                                                <NumberInputField />
+                                                <NumberInputStepper>
+                                                    <NumberIncrementStepper />
+                                                    <NumberDecrementStepper />
+                                                </NumberInputStepper>
+                                            </NumberInput>
+                                        </FormControl>
+                                    </HStack>
+                                    <HStack spacing={3}>
+                                        <FormControl>
+                                            <FormLabel fontSize="xs">Quantity</FormLabel>
+                                            <NumberInput
+                                                size="sm"
+                                                value={newItem.quantity || 1}
+                                                onChange={(_, value) => setNewItem({ ...newItem, quantity: value })}
+                                                min={1}
+                                                step={1}
+                                            >
+                                                <NumberInputField />
+                                                <NumberInputStepper>
+                                                    <NumberIncrementStepper />
+                                                    <NumberDecrementStepper />
+                                                </NumberInputStepper>
+                                            </NumberInput>
+                                        </FormControl>
+                                        <FormControl>
+                                            <FormLabel fontSize="xs">Category</FormLabel>
                                             <Select
                                                 size="sm"
-                                                value={item.categoryId}
-                                                onChange={(e) => {
-                                                    const categoryId = e.target.value;
-                                                    const category = categories?.find(c => c.id === categoryId);
-                                                    handleItemChange(item.id, 'categoryId', categoryId);
-                                                    handleItemChange(item.id, 'category', {
-                                                        id: categoryId,
-                                                        name: category?.name || ''
-                                                    });
-                                                }}
+                                                value={newItem.categoryId || ''}
+                                                onChange={(e) => setNewItem({ ...newItem, categoryId: e.target.value })}
                                             >
                                                 {categories?.map(category => (
                                                     <option key={category.id} value={category.id}>
@@ -709,180 +804,243 @@ const ReceiptDetail: React.FC = () => {
                                                     </option>
                                                 ))}
                                             </Select>
-                                        ) : (
-                                            <Badge colorScheme="blue">{item.category.name}</Badge>
-                                        )}
-                                    </Td>
-                                    <Td isNumeric>
-                                        {isEditing ? (
-                                            <NumberInput
-                                                size="sm"
-                                                value={item.quantity}
-                                                onChange={(_, value) => handleItemChange(item.id, 'quantity', value)}
-                                                min={1}
-                                                step={1}
-                                                maxW="80px"
-                                                ml="auto"
-                                            >
-                                                <NumberInputField />
-                                                <NumberInputStepper>
-                                                    <NumberIncrementStepper />
-                                                    <NumberDecrementStepper />
-                                                </NumberInputStepper>
-                                            </NumberInput>
-                                        ) : (
-                                            item.quantity
-                                        )}
-                                    </Td>
-                                    <Td isNumeric>
-                                        {isEditing ? (
-                                            <NumberInput
-                                                size="sm"
-                                                value={item.price}
-                                                onChange={(_, value) => handleItemChange(item.id, 'price', value)}
-                                                min={0}
-                                                step={0.01}
-                                                precision={2}
-                                                maxW="100px"
-                                                ml="auto"
-                                            >
-                                                <NumberInputField />
-                                                <NumberInputStepper>
-                                                    <NumberIncrementStepper />
-                                                    <NumberDecrementStepper />
-                                                </NumberInputStepper>
-                                            </NumberInput>
-                                        ) : (
-                                            `$${item.price.toFixed(2)}`
-                                        )}
-                                    </Td>
-                                    <Td isNumeric>${(item.price * item.quantity).toFixed(2)}</Td>
-                                    {isEditing && (
-                                        <Td>
-                                            <Tooltip label="Delete item">
-                                                <IconButton
-                                                    aria-label="Delete item"
-                                                    icon={<DeleteIcon />}
-                                                    size="xs"
-                                                    onClick={() => {
-                                                        setItemToDelete(item.id);
-                                                        deleteAlertDisclosure.onOpen();
-                                                    }}
-                                                    colorScheme="red"
-                                                    variant="ghost"
-                                                />
-                                            </Tooltip>
-                                        </Td>
-                                    )}
-                                </Tr>
-                            ))}
-                        </Tbody>
-                    </Table>
-                </CardBody>
-            </Card>
+                                        </FormControl>
+                                    </HStack>
+                                    <Button
+                                        mt={3}
+                                        size="sm"
+                                        colorScheme="blue"
+                                        onClick={handleAddItem}
+                                        isDisabled={!newItem.name}
+                                        width="full"
+                                    >
+                                        Add Item
+                                    </Button>
+                                </Box>
+                            )}
 
-            {/* Delete Item Confirmation */}
-            <AlertDialog
-                isOpen={deleteAlertDisclosure.isOpen}
-                leastDestructiveRef={cancelRef}
-                onClose={deleteAlertDisclosure.onClose}
-            >
-                <AlertDialogOverlay>
-                    <AlertDialogContent>
-                        <AlertDialogHeader fontSize="lg" fontWeight="bold">
-                            Delete Item
-                        </AlertDialogHeader>
+                            <Table variant="simple" size="sm">
+                                <Thead>
+                                    <Tr>
+                                        <Th>Item</Th>
+                                        <Th>Category</Th>
+                                        <Th isNumeric>Quantity</Th>
+                                        <Th isNumeric>Price</Th>
+                                        <Th isNumeric>Total</Th>
+                                        {isEditing && <Th width="80px">Actions</Th>}
+                                    </Tr>
+                                </Thead>
+                                <Tbody>
+                                    {editedReceipt.items.map((item) => (
+                                        <Tr key={item.id}>
+                                            <Td>
+                                                {isEditing ? (
+                                                    <Input
+                                                        size="sm"
+                                                        value={item.name}
+                                                        onChange={(e) => handleItemChange(item.id, 'name', e.target.value)}
+                                                    />
+                                                ) : (
+                                                    <Text>{item.name}</Text>
+                                                )}
+                                            </Td>
+                                            <Td>
+                                                {isEditing ? (
+                                                    <Select
+                                                        size="sm"
+                                                        value={item.categoryId}
+                                                        onChange={(e) => {
+                                                            const categoryId = e.target.value;
+                                                            const category = categories?.find(c => c.id === categoryId);
+                                                            handleItemChange(item.id, 'categoryId', categoryId);
+                                                            handleItemChange(item.id, 'category', {
+                                                                id: categoryId,
+                                                                name: category?.name || ''
+                                                            });
+                                                        }}
+                                                    >
+                                                        {categories?.map(category => (
+                                                            <option key={category.id} value={category.id}>
+                                                                {category.name}
+                                                            </option>
+                                                        ))}
+                                                    </Select>
+                                                ) : (
+                                                    <Badge colorScheme="blue">{item.category.name}</Badge>
+                                                )}
+                                            </Td>
+                                            <Td isNumeric>
+                                                {isEditing ? (
+                                                    <NumberInput
+                                                        size="sm"
+                                                        value={item.quantity}
+                                                        onChange={(_, value) => handleItemChange(item.id, 'quantity', value)}
+                                                        min={1}
+                                                        step={1}
+                                                        maxW="80px"
+                                                        ml="auto"
+                                                    >
+                                                        <NumberInputField />
+                                                        <NumberInputStepper>
+                                                            <NumberIncrementStepper />
+                                                            <NumberDecrementStepper />
+                                                        </NumberInputStepper>
+                                                    </NumberInput>
+                                                ) : (
+                                                    item.quantity
+                                                )}
+                                            </Td>
+                                            <Td isNumeric>
+                                                {isEditing ? (
+                                                    <NumberInput
+                                                        size="sm"
+                                                        value={item.price}
+                                                        onChange={(_, value) => handleItemChange(item.id, 'price', value)}
+                                                        min={0}
+                                                        step={0.01}
+                                                        precision={2}
+                                                        maxW="100px"
+                                                        ml="auto"
+                                                    >
+                                                        <NumberInputField />
+                                                        <NumberInputStepper>
+                                                            <NumberIncrementStepper />
+                                                            <NumberDecrementStepper />
+                                                        </NumberInputStepper>
+                                                    </NumberInput>
+                                                ) : (
+                                                    `$${item.price.toFixed(2)}`
+                                                )}
+                                            </Td>
+                                            <Td isNumeric>${(item.price * item.quantity).toFixed(2)}</Td>
+                                            {isEditing && (
+                                                <Td>
+                                                    <Tooltip label="Delete item">
+                                                        <IconButton
+                                                            aria-label="Delete item"
+                                                            icon={<DeleteIcon />}
+                                                            size="xs"
+                                                            onClick={() => {
+                                                                setItemToDelete(item.id);
+                                                                deleteAlertDisclosure.onOpen();
+                                                            }}
+                                                            colorScheme="red"
+                                                            variant="ghost"
+                                                        />
+                                                    </Tooltip>
+                                                </Td>
+                                            )}
+                                        </Tr>
+                                    ))}
+                                </Tbody>
+                            </Table>
+                        </CardBody>
+                    </Card>
 
-                        <AlertDialogBody>
-                            Are you sure you want to delete this item? This action cannot be undone.
-                        </AlertDialogBody>
+                    {/* Delete Item Confirmation */}
+                    <AlertDialog
+                        isOpen={deleteAlertDisclosure.isOpen}
+                        leastDestructiveRef={cancelRef}
+                        onClose={deleteAlertDisclosure.onClose}
+                    >
+                        <AlertDialogOverlay>
+                            <AlertDialogContent>
+                                <AlertDialogHeader fontSize="lg" fontWeight="bold">
+                                    Delete Item
+                                </AlertDialogHeader>
 
-                        <AlertDialogFooter>
-                            <Button ref={cancelRef} onClick={deleteAlertDisclosure.onClose}>
-                                Cancel
-                            </Button>
-                            <Button
-                                colorScheme="red"
-                                onClick={() => {
-                                    if (itemToDelete) {
-                                        handleDeleteItem(itemToDelete);
-                                    }
-                                    deleteAlertDisclosure.onClose();
-                                }}
-                                ml={3}
-                            >
-                                Delete
-                            </Button>
-                        </AlertDialogFooter>
-                    </AlertDialogContent>
-                </AlertDialogOverlay>
-            </AlertDialog>
+                                <AlertDialogBody>
+                                    Are you sure you want to delete this item? This action cannot be undone.
+                                </AlertDialogBody>
 
-            {/* Recalculate Receipt Confirmation */}
-            <AlertDialog
-                isOpen={recalculateDisclosure.isOpen}
-                leastDestructiveRef={cancelRef}
-                onClose={recalculateDisclosure.onClose}
-            >
-                <AlertDialogOverlay>
-                    <AlertDialogContent>
-                        <AlertDialogHeader fontSize="lg" fontWeight="bold">
-                            Recalculate Receipt
-                        </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                    <Button ref={cancelRef} onClick={deleteAlertDisclosure.onClose}>
+                                        Cancel
+                                    </Button>
+                                    <Button
+                                        colorScheme="red"
+                                        onClick={() => {
+                                            if (itemToDelete) {
+                                                handleDeleteItem(itemToDelete);
+                                            }
+                                            deleteAlertDisclosure.onClose();
+                                        }}
+                                        ml={3}
+                                    >
+                                        Delete
+                                    </Button>
+                                </AlertDialogFooter>
+                            </AlertDialogContent>
+                        </AlertDialogOverlay>
+                    </AlertDialog>
 
-                        <AlertDialogBody>
-                            This will recalculate all receipt data from the original image. Any manual edits will be lost. Are you sure you want to continue?
-                        </AlertDialogBody>
+                    {/* Recalculate Receipt Confirmation */}
+                    <AlertDialog
+                        isOpen={recalculateDisclosure.isOpen}
+                        leastDestructiveRef={cancelRef}
+                        onClose={recalculateDisclosure.onClose}
+                    >
+                        <AlertDialogOverlay>
+                            <AlertDialogContent>
+                                <AlertDialogHeader fontSize="lg" fontWeight="bold">
+                                    Recalculate Receipt
+                                </AlertDialogHeader>
 
-                        <AlertDialogFooter>
-                            <Button ref={cancelRef} onClick={recalculateDisclosure.onClose}>
-                                Cancel
-                            </Button>
-                            <Button
-                                colorScheme="blue"
-                                onClick={handleRecalculateReceipt}
-                                ml={3}
-                                isLoading={recalculateReceiptMutation.isPending}
-                            >
-                                Recalculate
-                            </Button>
-                        </AlertDialogFooter>
-                    </AlertDialogContent>
-                </AlertDialogOverlay>
-            </AlertDialog>
+                                <AlertDialogBody>
+                                    This will recalculate all receipt data from the original image. Any manual edits will be lost. Are you sure you want to continue?
+                                </AlertDialogBody>
 
-            {/* Delete Receipt Confirmation */}
-            <AlertDialog
-                isOpen={deleteReceiptDisclosure.isOpen}
-                leastDestructiveRef={cancelRef}
-                onClose={deleteReceiptDisclosure.onClose}
-            >
-                <AlertDialogOverlay>
-                    <AlertDialogContent>
-                        <AlertDialogHeader fontSize="lg" fontWeight="bold">
-                            Delete Receipt
-                        </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                    <Button ref={cancelRef} onClick={recalculateDisclosure.onClose}>
+                                        Cancel
+                                    </Button>
+                                    <Button
+                                        colorScheme="blue"
+                                        onClick={handleRecalculateReceipt}
+                                        ml={3}
+                                        isLoading={recalculateReceiptMutation.isPending}
+                                    >
+                                        Recalculate
+                                    </Button>
+                                </AlertDialogFooter>
+                            </AlertDialogContent>
+                        </AlertDialogOverlay>
+                    </AlertDialog>
 
-                        <AlertDialogBody>
-                            Are you sure you want to delete this entire receipt? This action cannot be undone.
-                        </AlertDialogBody>
+                    {/* Delete Receipt Confirmation */}
+                    <AlertDialog
+                        isOpen={deleteReceiptDisclosure.isOpen}
+                        leastDestructiveRef={cancelRef}
+                        onClose={deleteReceiptDisclosure.onClose}
+                    >
+                        <AlertDialogOverlay>
+                            <AlertDialogContent>
+                                <AlertDialogHeader fontSize="lg" fontWeight="bold">
+                                    Delete Receipt
+                                </AlertDialogHeader>
 
-                        <AlertDialogFooter>
-                            <Button ref={cancelRef} onClick={deleteReceiptDisclosure.onClose}>
-                                Cancel
-                            </Button>
-                            <Button
-                                colorScheme="red"
-                                onClick={handleDeleteReceipt}
-                                ml={3}
-                                isLoading={deleteReceiptMutation.isPending}
-                            >
-                                Delete
-                            </Button>
-                        </AlertDialogFooter>
-                    </AlertDialogContent>
-                </AlertDialogOverlay>
-            </AlertDialog>
+                                <AlertDialogBody>
+                                    Are you sure you want to delete this entire receipt? This action cannot be undone.
+                                </AlertDialogBody>
+
+                                <AlertDialogFooter>
+                                    <Button ref={cancelRef} onClick={deleteReceiptDisclosure.onClose}>
+                                        Cancel
+                                    </Button>
+                                    <Button
+                                        colorScheme="red"
+                                        onClick={handleDeleteReceipt}
+                                        ml={3}
+                                        isLoading={deleteReceiptMutation.isPending}
+                                    >
+                                        Delete
+                                    </Button>
+                                </AlertDialogFooter>
+                            </AlertDialogContent>
+                        </AlertDialogOverlay>
+                    </AlertDialog>
+                </>
+            )}
         </VStack>
     );
 };
