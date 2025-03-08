@@ -107,9 +107,10 @@ const ReceiptDetail: React.FC = () => {
     const queryClient = useQueryClient();
     const [isEditing, setIsEditing] = useState(false);
     const [editedReceipt, setEditedReceipt] = useState<Receipt | null>(null);
-    const [editingItem, setEditingItem] = useState<string | null>(null);
     const [newItem, setNewItem] = useState<Partial<Item> | null>(null);
     const [itemToDelete, setItemToDelete] = useState<string | null>(null);
+    const [isSaving, setIsSaving] = useState(false);
+    const [saveTimeout, setSaveTimeout] = useState<ReturnType<typeof setTimeout> | null>(null);
 
     const deleteAlertDisclosure = useDisclosure();
     const recalculateDisclosure = useDisclosure();
@@ -143,7 +144,7 @@ const ReceiptDetail: React.FC = () => {
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['receipt', id] });
             queryClient.invalidateQueries({ queryKey: ['receipts'] });
-            setIsEditing(false);
+            setIsSaving(false);
             toast({
                 title: 'Receipt updated',
                 status: 'success',
@@ -152,6 +153,7 @@ const ReceiptDetail: React.FC = () => {
             });
         },
         onError: () => {
+            setIsSaving(false);
             toast({
                 title: 'Error',
                 description: 'Failed to update receipt',
@@ -254,8 +256,13 @@ const ReceiptDetail: React.FC = () => {
                 items: receipt.items.map(item => ({ ...item }))
             });
             setIsEditing(false);
-            setEditingItem(null);
             setNewItem(null);
+
+            // Clear any pending save
+            if (saveTimeout) {
+                clearTimeout(saveTimeout);
+                setSaveTimeout(null);
+            }
         } else {
             // Start editing
             setIsEditing(true);
@@ -264,6 +271,8 @@ const ReceiptDetail: React.FC = () => {
 
     const handleSaveReceipt = () => {
         if (editedReceipt) {
+            setIsSaving(true);
+
             // Calculate total amount from items
             const totalAmount = editedReceipt.items.reduce(
                 (sum, item) => sum + item.price * item.quantity,
@@ -277,6 +286,28 @@ const ReceiptDetail: React.FC = () => {
         }
     };
 
+    // Auto-save changes after a delay
+    const debouncedSave = (updatedReceipt: Receipt) => {
+        if (saveTimeout) {
+            clearTimeout(saveTimeout);
+        }
+
+        setIsSaving(true);
+        const timeout = setTimeout(() => {
+            const totalAmount = updatedReceipt.items.reduce(
+                (sum, item) => sum + item.price * item.quantity,
+                0
+            );
+
+            updateReceiptMutation.mutate({
+                ...updatedReceipt,
+                totalAmount
+            });
+        }, 1500); // 1.5 second delay before saving
+
+        setSaveTimeout(timeout);
+    };
+
     const handleDeleteReceipt = () => {
         deleteReceiptMutation.mutate();
     };
@@ -288,23 +319,28 @@ const ReceiptDetail: React.FC = () => {
 
     const handleItemChange = (itemId: string, field: keyof Item, value: any) => {
         if (editedReceipt) {
-            setEditedReceipt({
+            const updatedReceipt = {
                 ...editedReceipt,
                 items: editedReceipt.items.map(item =>
                     item.id === itemId
                         ? { ...item, [field]: value }
                         : item
                 )
-            });
+            };
+
+            setEditedReceipt(updatedReceipt);
+            debouncedSave(updatedReceipt);
         }
     };
 
     const handleDeleteItem = (itemId: string) => {
         if (editedReceipt) {
-            setEditedReceipt({
+            const updatedReceipt = {
                 ...editedReceipt,
                 items: editedReceipt.items.filter(item => item.id !== itemId)
-            });
+            };
+            setEditedReceipt(updatedReceipt);
+            debouncedSave(updatedReceipt);
         }
         setItemToDelete(null);
     };
@@ -324,13 +360,14 @@ const ReceiptDetail: React.FC = () => {
                 }
             };
 
-            setEditedReceipt({
+            const updatedReceipt = {
                 ...editedReceipt,
                 items: [...editedReceipt.items, newItemComplete]
-            });
+            };
 
+            setEditedReceipt(updatedReceipt);
+            debouncedSave(updatedReceipt);
             setNewItem(null);
-            setEditingItem(tempId);
         }
     };
 
@@ -352,32 +389,33 @@ const ReceiptDetail: React.FC = () => {
     return (
         <VStack spacing={6} align="stretch">
             <Flex justify="space-between" align="center">
-                <Heading size="lg">Receipt Details</Heading>
                 <HStack>
-                    <Tooltip label={isEditing ? "Cancel editing" : "Edit receipt"}>
-                        <IconButton
-                            aria-label={isEditing ? "Cancel editing" : "Edit receipt"}
-                            icon={isEditing ? <CloseIcon /> : <EditIcon />}
+                    <Heading size="lg">Receipt Details</Heading>
+                    {isEditing && (
+                        <Badge colorScheme="blue" fontSize="md" variant="solid" px={2} py={1}>
+                            Editing Mode
+                        </Badge>
+                    )}
+                </HStack>
+                <HStack spacing={3}>
+                    {isSaving && (
+                        <HStack spacing={2}>
+                            <Spinner size="sm" color="blue.500" />
+                            <Text fontSize="sm" color="blue.500">Saving changes...</Text>
+                        </HStack>
+                    )}
+
+                    <Tooltip label={isEditing ? "Done editing" : "Edit receipt"}>
+                        <Button
+                            leftIcon={isEditing ? <CheckIcon /> : <EditIcon />}
                             size="sm"
                             onClick={handleEditToggle}
-                            colorScheme={isEditing ? "red" : "blue"}
-                            variant="ghost"
-                        />
+                            colorScheme={isEditing ? "green" : "blue"}
+                            isLoading={updateReceiptMutation.isPending}
+                        >
+                            {isEditing ? "Done" : "Edit"}
+                        </Button>
                     </Tooltip>
-
-                    {isEditing && (
-                        <Tooltip label="Save changes">
-                            <IconButton
-                                aria-label="Save changes"
-                                icon={<CheckIcon />}
-                                size="sm"
-                                onClick={handleSaveReceipt}
-                                colorScheme="green"
-                                variant="ghost"
-                                isLoading={updateReceiptMutation.isPending}
-                            />
-                        </Tooltip>
-                    )}
 
                     <Menu>
                         <MenuButton as={Button} rightIcon={<ChevronDownIcon />} size="sm" variant="outline">
@@ -406,7 +444,7 @@ const ReceiptDetail: React.FC = () => {
                 </HStack>
             </Flex>
 
-            <Card>
+            <Card borderWidth={isEditing ? "2px" : "1px"} borderColor={isEditing ? "blue.400" : "gray.200"}>
                 <CardBody>
                     <HStack spacing={6} align="flex-start">
                         <Box flex="1">
@@ -417,10 +455,14 @@ const ReceiptDetail: React.FC = () => {
                                         <Input
                                             type="date"
                                             value={new Date(editedReceipt.date).toISOString().split('T')[0]}
-                                            onChange={(e) => setEditedReceipt({
-                                                ...editedReceipt,
-                                                date: new Date(e.target.value).toISOString()
-                                            })}
+                                            onChange={(e) => {
+                                                const updatedReceipt = {
+                                                    ...editedReceipt,
+                                                    date: new Date(e.target.value).toISOString()
+                                                };
+                                                setEditedReceipt(updatedReceipt);
+                                                debouncedSave(updatedReceipt);
+                                            }}
                                             size="sm"
                                         />
                                     ) : (
@@ -444,13 +486,17 @@ const ReceiptDetail: React.FC = () => {
                                         {isEditing ? (
                                             <Input
                                                 value={editedReceipt.shop?.name || ''}
-                                                onChange={(e) => setEditedReceipt({
-                                                    ...editedReceipt,
-                                                    shop: {
-                                                        ...(editedReceipt.shop || { id: '', name: '' }),
-                                                        name: e.target.value
-                                                    }
-                                                })}
+                                                onChange={(e) => {
+                                                    const updatedReceipt = {
+                                                        ...editedReceipt,
+                                                        shop: {
+                                                            ...(editedReceipt.shop || { id: '', name: '' }),
+                                                            name: e.target.value
+                                                        }
+                                                    };
+                                                    setEditedReceipt(updatedReceipt);
+                                                    debouncedSave(updatedReceipt);
+                                                }}
                                                 placeholder="Shop name"
                                                 size="sm"
                                                 mb={2}
@@ -462,13 +508,17 @@ const ReceiptDetail: React.FC = () => {
                                         {isEditing ? (
                                             <Input
                                                 value={editedReceipt.shop?.address || ''}
-                                                onChange={(e) => setEditedReceipt({
-                                                    ...editedReceipt,
-                                                    shop: {
-                                                        ...(editedReceipt.shop || { id: '', name: '' }),
-                                                        address: e.target.value
-                                                    }
-                                                })}
+                                                onChange={(e) => {
+                                                    const updatedReceipt = {
+                                                        ...editedReceipt,
+                                                        shop: {
+                                                            ...(editedReceipt.shop || { id: '', name: '' }),
+                                                            address: e.target.value
+                                                        }
+                                                    };
+                                                    setEditedReceipt(updatedReceipt);
+                                                    debouncedSave(updatedReceipt);
+                                                }}
                                                 placeholder="Shop address (optional)"
                                                 size="sm"
                                             />
@@ -507,20 +557,20 @@ const ReceiptDetail: React.FC = () => {
                 </CardBody>
             </Card>
 
-            <Card>
+            <Card borderWidth={isEditing ? "2px" : "1px"} borderColor={isEditing ? "blue.400" : "gray.200"}>
                 <CardBody>
                     <Flex justify="space-between" align="center" mb={4}>
                         <Heading size="md">Items ({editedReceipt.items.length})</Heading>
                         {isEditing && !newItem && (
                             <Tooltip label="Add item">
-                                <IconButton
-                                    aria-label="Add item"
-                                    icon={<AddIcon />}
+                                <Button
+                                    leftIcon={<AddIcon />}
                                     size="sm"
                                     onClick={startAddingItem}
                                     colorScheme="blue"
-                                    variant="ghost"
-                                />
+                                >
+                                    Add Item
+                                </Button>
                             </Tooltip>
                         )}
                     </Flex>
@@ -625,21 +675,14 @@ const ReceiptDetail: React.FC = () => {
                             {editedReceipt.items.map((item) => (
                                 <Tr key={item.id}>
                                     <Td>
-                                        {isEditing && editingItem === item.id ? (
+                                        {isEditing ? (
                                             <Input
                                                 size="sm"
                                                 value={item.name}
                                                 onChange={(e) => handleItemChange(item.id, 'name', e.target.value)}
                                             />
                                         ) : (
-                                            <Editable
-                                                isDisabled={!isEditing}
-                                                defaultValue={item.name}
-                                                onSubmit={(value) => handleItemChange(item.id, 'name', value)}
-                                            >
-                                                <EditablePreview />
-                                                <EditableInput />
-                                            </Editable>
+                                            <Text>{item.name}</Text>
                                         )}
                                     </Td>
                                     <Td>
@@ -713,44 +756,19 @@ const ReceiptDetail: React.FC = () => {
                                     <Td isNumeric>${(item.price * item.quantity).toFixed(2)}</Td>
                                     {isEditing && (
                                         <Td>
-                                            <HStack spacing={1} justify="flex-end">
-                                                {editingItem !== item.id && (
-                                                    <Tooltip label="Edit item">
-                                                        <IconButton
-                                                            aria-label="Edit item"
-                                                            icon={<EditIcon />}
-                                                            size="xs"
-                                                            onClick={() => setEditingItem(item.id)}
-                                                            variant="ghost"
-                                                        />
-                                                    </Tooltip>
-                                                )}
-                                                {editingItem === item.id && (
-                                                    <Tooltip label="Done editing">
-                                                        <IconButton
-                                                            aria-label="Done editing"
-                                                            icon={<CheckIcon />}
-                                                            size="xs"
-                                                            onClick={() => setEditingItem(null)}
-                                                            colorScheme="green"
-                                                            variant="ghost"
-                                                        />
-                                                    </Tooltip>
-                                                )}
-                                                <Tooltip label="Delete item">
-                                                    <IconButton
-                                                        aria-label="Delete item"
-                                                        icon={<DeleteIcon />}
-                                                        size="xs"
-                                                        onClick={() => {
-                                                            setItemToDelete(item.id);
-                                                            deleteAlertDisclosure.onOpen();
-                                                        }}
-                                                        colorScheme="red"
-                                                        variant="ghost"
-                                                    />
-                                                </Tooltip>
-                                            </HStack>
+                                            <Tooltip label="Delete item">
+                                                <IconButton
+                                                    aria-label="Delete item"
+                                                    icon={<DeleteIcon />}
+                                                    size="xs"
+                                                    onClick={() => {
+                                                        setItemToDelete(item.id);
+                                                        deleteAlertDisclosure.onOpen();
+                                                    }}
+                                                    colorScheme="red"
+                                                    variant="ghost"
+                                                />
+                                            </Tooltip>
                                         </Td>
                                     )}
                                 </Tr>

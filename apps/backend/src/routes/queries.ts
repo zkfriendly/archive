@@ -43,7 +43,7 @@ router.post('/', async (req, res) => {
 
         // Use Claude to analyze the query and generate a response
         const message = await anthropic.messages.create({
-            model: "claude-3-sonnet-20240229",
+            model: "claude-3-7-sonnet-20250219",
             max_tokens: 1024,
             messages: [{
                 role: 'user',
