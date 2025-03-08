@@ -1,6 +1,6 @@
-import React from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import React, { useState } from 'react';
+import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import {
     Box,
@@ -22,14 +22,56 @@ import {
     Flex,
     Spinner,
     useToast,
+    IconButton,
+    Input,
+    NumberInput,
+    NumberInputField,
+    NumberInputStepper,
+    NumberIncrementStepper,
+    NumberDecrementStepper,
+    Select,
+    Tooltip,
+    useDisclosure,
+    Modal,
+    ModalOverlay,
+    ModalContent,
+    ModalHeader,
+    ModalFooter,
+    ModalBody,
+    ModalCloseButton,
+    AlertDialog,
+    AlertDialogBody,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogContent,
+    AlertDialogOverlay,
+    FormControl,
+    FormLabel,
+    Editable,
+    EditableInput,
+    EditablePreview,
+    Menu,
+    MenuButton,
+    MenuList,
+    MenuItem,
 } from '@chakra-ui/react';
-import { ExternalLinkIcon } from '@chakra-ui/icons';
+import {
+    ExternalLinkIcon,
+    EditIcon,
+    DeleteIcon,
+    AddIcon,
+    CheckIcon,
+    CloseIcon,
+    RepeatIcon,
+    ChevronDownIcon
+} from '@chakra-ui/icons';
 
 interface Item {
     id: string;
     name: string;
     price: number;
     quantity: number;
+    categoryId: string;
     category: {
         id: string;
         name: string;
@@ -50,12 +92,31 @@ interface Receipt {
     rawImagePath: string;
     items: Item[];
     shop?: Shop;
+    shopId?: string;
+}
+
+interface Category {
+    id: string;
+    name: string;
 }
 
 const ReceiptDetail: React.FC = () => {
     const { id } = useParams<{ id: string }>();
     const toast = useToast();
+    const navigate = useNavigate();
+    const queryClient = useQueryClient();
+    const [isEditing, setIsEditing] = useState(false);
+    const [editedReceipt, setEditedReceipt] = useState<Receipt | null>(null);
+    const [editingItem, setEditingItem] = useState<string | null>(null);
+    const [newItem, setNewItem] = useState<Partial<Item> | null>(null);
+    const [itemToDelete, setItemToDelete] = useState<string | null>(null);
 
+    const deleteAlertDisclosure = useDisclosure();
+    const recalculateDisclosure = useDisclosure();
+    const deleteReceiptDisclosure = useDisclosure();
+    const cancelRef = React.useRef<HTMLButtonElement>(null);
+
+    // Fetch receipt data
     const { data: receipt, isLoading, error } = useQuery<Receipt>({
         queryKey: ['receipt', id],
         queryFn: async () => {
@@ -63,6 +124,107 @@ const ReceiptDetail: React.FC = () => {
             return response.data;
         },
     });
+
+    // Fetch categories for dropdown
+    const { data: categories } = useQuery<Category[]>({
+        queryKey: ['categories'],
+        queryFn: async () => {
+            const response = await axios.get('/api/categories');
+            return response.data;
+        },
+    });
+
+    // Update receipt mutation
+    const updateReceiptMutation = useMutation({
+        mutationFn: async (updatedReceipt: Receipt) => {
+            const response = await axios.put(`/api/receipts/${id}`, updatedReceipt);
+            return response.data;
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['receipt', id] });
+            queryClient.invalidateQueries({ queryKey: ['receipts'] });
+            setIsEditing(false);
+            toast({
+                title: 'Receipt updated',
+                status: 'success',
+                duration: 3000,
+                isClosable: true,
+            });
+        },
+        onError: () => {
+            toast({
+                title: 'Error',
+                description: 'Failed to update receipt',
+                status: 'error',
+                duration: 3000,
+                isClosable: true,
+            });
+        },
+    });
+
+    // Delete receipt mutation
+    const deleteReceiptMutation = useMutation({
+        mutationFn: async () => {
+            await axios.delete(`/api/receipts/${id}`);
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['receipts'] });
+            toast({
+                title: 'Receipt deleted',
+                status: 'success',
+                duration: 3000,
+                isClosable: true,
+            });
+            navigate('/dashboard');
+        },
+        onError: () => {
+            toast({
+                title: 'Error',
+                description: 'Failed to delete receipt',
+                status: 'error',
+                duration: 3000,
+                isClosable: true,
+            });
+        },
+    });
+
+    // Recalculate receipt from image mutation
+    const recalculateReceiptMutation = useMutation({
+        mutationFn: async () => {
+            const response = await axios.post(`/api/receipts/${id}/recalculate`);
+            return response.data;
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['receipt', id] });
+            queryClient.invalidateQueries({ queryKey: ['receipts'] });
+            toast({
+                title: 'Receipt recalculated',
+                description: 'Receipt data has been updated based on the original image',
+                status: 'success',
+                duration: 3000,
+                isClosable: true,
+            });
+        },
+        onError: () => {
+            toast({
+                title: 'Error',
+                description: 'Failed to recalculate receipt',
+                status: 'error',
+                duration: 3000,
+                isClosable: true,
+            });
+        },
+    });
+
+    // Initialize editing state when receipt data is loaded
+    React.useEffect(() => {
+        if (receipt && !editedReceipt) {
+            setEditedReceipt({
+                ...receipt,
+                items: receipt.items.map(item => ({ ...item }))
+            });
+        }
+    }, [receipt, editedReceipt]);
 
     if (isLoading) {
         return (
@@ -72,7 +234,7 @@ const ReceiptDetail: React.FC = () => {
         );
     }
 
-    if (error || !receipt) {
+    if (error || !receipt || !editedReceipt) {
         return (
             <Box textAlign="center" py={10}>
                 <Heading size="md">Error loading receipt</Heading>
@@ -84,16 +246,164 @@ const ReceiptDetail: React.FC = () => {
         );
     }
 
-    // Type assertion to help TypeScript understand the data structure
-    const receiptData = receipt as Receipt;
+    const handleEditToggle = () => {
+        if (isEditing) {
+            // Cancel editing
+            setEditedReceipt({
+                ...receipt,
+                items: receipt.items.map(item => ({ ...item }))
+            });
+            setIsEditing(false);
+            setEditingItem(null);
+            setNewItem(null);
+        } else {
+            // Start editing
+            setIsEditing(true);
+        }
+    };
+
+    const handleSaveReceipt = () => {
+        if (editedReceipt) {
+            // Calculate total amount from items
+            const totalAmount = editedReceipt.items.reduce(
+                (sum, item) => sum + item.price * item.quantity,
+                0
+            );
+
+            updateReceiptMutation.mutate({
+                ...editedReceipt,
+                totalAmount
+            });
+        }
+    };
+
+    const handleDeleteReceipt = () => {
+        deleteReceiptMutation.mutate();
+    };
+
+    const handleRecalculateReceipt = () => {
+        recalculateReceiptMutation.mutate();
+        recalculateDisclosure.onClose();
+    };
+
+    const handleItemChange = (itemId: string, field: keyof Item, value: any) => {
+        if (editedReceipt) {
+            setEditedReceipt({
+                ...editedReceipt,
+                items: editedReceipt.items.map(item =>
+                    item.id === itemId
+                        ? { ...item, [field]: value }
+                        : item
+                )
+            });
+        }
+    };
+
+    const handleDeleteItem = (itemId: string) => {
+        if (editedReceipt) {
+            setEditedReceipt({
+                ...editedReceipt,
+                items: editedReceipt.items.filter(item => item.id !== itemId)
+            });
+        }
+        setItemToDelete(null);
+    };
+
+    const handleAddItem = () => {
+        if (newItem && editedReceipt && categories && categories.length > 0) {
+            const tempId = `temp-${Date.now()}`;
+            const newItemComplete: Item = {
+                id: tempId,
+                name: newItem.name || 'New Item',
+                price: newItem.price || 0,
+                quantity: newItem.quantity || 1,
+                categoryId: newItem.categoryId || categories[0].id,
+                category: {
+                    id: newItem.categoryId || categories[0].id,
+                    name: categories.find(c => c.id === newItem.categoryId)?.name || categories[0].name
+                }
+            };
+
+            setEditedReceipt({
+                ...editedReceipt,
+                items: [...editedReceipt.items, newItemComplete]
+            });
+
+            setNewItem(null);
+            setEditingItem(tempId);
+        }
+    };
+
+    const startAddingItem = () => {
+        if (categories && categories.length > 0) {
+            setNewItem({
+                name: '',
+                price: 0,
+                quantity: 1,
+                categoryId: categories[0].id
+            });
+        }
+    };
+
+    const cancelAddItem = () => {
+        setNewItem(null);
+    };
 
     return (
         <VStack spacing={6} align="stretch">
             <Flex justify="space-between" align="center">
                 <Heading size="lg">Receipt Details</Heading>
-                <Button as={Link} to="/dashboard" size="sm" colorScheme="blue">
-                    Back to Dashboard
-                </Button>
+                <HStack>
+                    <Tooltip label={isEditing ? "Cancel editing" : "Edit receipt"}>
+                        <IconButton
+                            aria-label={isEditing ? "Cancel editing" : "Edit receipt"}
+                            icon={isEditing ? <CloseIcon /> : <EditIcon />}
+                            size="sm"
+                            onClick={handleEditToggle}
+                            colorScheme={isEditing ? "red" : "blue"}
+                            variant="ghost"
+                        />
+                    </Tooltip>
+
+                    {isEditing && (
+                        <Tooltip label="Save changes">
+                            <IconButton
+                                aria-label="Save changes"
+                                icon={<CheckIcon />}
+                                size="sm"
+                                onClick={handleSaveReceipt}
+                                colorScheme="green"
+                                variant="ghost"
+                                isLoading={updateReceiptMutation.isPending}
+                            />
+                        </Tooltip>
+                    )}
+
+                    <Menu>
+                        <MenuButton as={Button} rightIcon={<ChevronDownIcon />} size="sm" variant="outline">
+                            Actions
+                        </MenuButton>
+                        <MenuList>
+                            <MenuItem
+                                icon={<RepeatIcon />}
+                                onClick={recalculateDisclosure.onOpen}
+                            >
+                                Recalculate from image
+                            </MenuItem>
+                            <MenuItem
+                                icon={<DeleteIcon />}
+                                onClick={deleteReceiptDisclosure.onOpen}
+                                color="red.500"
+                            >
+                                Delete receipt
+                            </MenuItem>
+                        </MenuList>
+                    </Menu>
+
+                    <Button as={Link} to="/dashboard" size="sm" variant="outline">
+                        Back
+                    </Button>
+                </HStack>
             </Flex>
 
             <Card>
@@ -103,19 +413,68 @@ const ReceiptDetail: React.FC = () => {
                             <VStack align="stretch" spacing={4}>
                                 <Box>
                                     <Text fontWeight="bold">Date</Text>
-                                    <Text>{new Date(receiptData.date).toLocaleDateString()}</Text>
+                                    {isEditing ? (
+                                        <Input
+                                            type="date"
+                                            value={new Date(editedReceipt.date).toISOString().split('T')[0]}
+                                            onChange={(e) => setEditedReceipt({
+                                                ...editedReceipt,
+                                                date: new Date(e.target.value).toISOString()
+                                            })}
+                                            size="sm"
+                                        />
+                                    ) : (
+                                        <Text>{new Date(receipt.date).toLocaleDateString()}</Text>
+                                    )}
                                 </Box>
 
                                 <Box>
                                     <Text fontWeight="bold">Total Amount</Text>
-                                    <Text fontSize="xl" fontWeight="bold">${receiptData.totalAmount.toFixed(2)}</Text>
+                                    <Text fontSize="xl" fontWeight="bold">
+                                        ${editedReceipt.items.reduce((sum, item) => sum + (item.price * item.quantity), 0).toFixed(2)}
+                                    </Text>
+                                    <Text fontSize="xs" color="gray.500">
+                                        (Calculated from items)
+                                    </Text>
                                 </Box>
 
-                                {receiptData.shop && (
+                                {(receipt.shop || isEditing) && (
                                     <Box>
                                         <Text fontWeight="bold">Shop</Text>
-                                        <Text>{receiptData.shop.name}</Text>
-                                        {receiptData.shop.address && <Text fontSize="sm">{receiptData.shop.address}</Text>}
+                                        {isEditing ? (
+                                            <Input
+                                                value={editedReceipt.shop?.name || ''}
+                                                onChange={(e) => setEditedReceipt({
+                                                    ...editedReceipt,
+                                                    shop: {
+                                                        ...(editedReceipt.shop || { id: '', name: '' }),
+                                                        name: e.target.value
+                                                    }
+                                                })}
+                                                placeholder="Shop name"
+                                                size="sm"
+                                                mb={2}
+                                            />
+                                        ) : (
+                                            <Text>{receipt.shop?.name || 'Unknown Shop'}</Text>
+                                        )}
+
+                                        {isEditing ? (
+                                            <Input
+                                                value={editedReceipt.shop?.address || ''}
+                                                onChange={(e) => setEditedReceipt({
+                                                    ...editedReceipt,
+                                                    shop: {
+                                                        ...(editedReceipt.shop || { id: '', name: '' }),
+                                                        address: e.target.value
+                                                    }
+                                                })}
+                                                placeholder="Shop address (optional)"
+                                                size="sm"
+                                            />
+                                        ) : (
+                                            receipt.shop?.address && <Text fontSize="sm">{receipt.shop.address}</Text>
+                                        )}
                                     </Box>
                                 )}
                             </VStack>
@@ -124,22 +483,24 @@ const ReceiptDetail: React.FC = () => {
                         <Box maxW="200px">
                             <VStack>
                                 <Image
-                                    src={receiptData.imageUrl}
+                                    src={receipt.imageUrl}
                                     alt="Receipt"
                                     borderRadius="md"
                                     maxH="200px"
                                     fallbackSrc="https://via.placeholder.com/200x300?text=Receipt+Image"
                                 />
-                                <Button
-                                    as="a"
-                                    href={receiptData.rawImagePath}
-                                    target="_blank"
-                                    size="sm"
-                                    rightIcon={<ExternalLinkIcon />}
-                                    variant="outline"
-                                >
-                                    View Original
-                                </Button>
+                                <HStack>
+                                    <Button
+                                        as="a"
+                                        href={receipt.rawImagePath}
+                                        target="_blank"
+                                        size="sm"
+                                        rightIcon={<ExternalLinkIcon />}
+                                        variant="outline"
+                                    >
+                                        View Original
+                                    </Button>
+                                </HStack>
                             </VStack>
                         </Box>
                     </HStack>
@@ -148,8 +509,108 @@ const ReceiptDetail: React.FC = () => {
 
             <Card>
                 <CardBody>
-                    <Heading size="md" mb={4}>Items ({receiptData.items.length})</Heading>
-                    <Table variant="simple">
+                    <Flex justify="space-between" align="center" mb={4}>
+                        <Heading size="md">Items ({editedReceipt.items.length})</Heading>
+                        {isEditing && !newItem && (
+                            <Tooltip label="Add item">
+                                <IconButton
+                                    aria-label="Add item"
+                                    icon={<AddIcon />}
+                                    size="sm"
+                                    onClick={startAddingItem}
+                                    colorScheme="blue"
+                                    variant="ghost"
+                                />
+                            </Tooltip>
+                        )}
+                    </Flex>
+
+                    {newItem && (
+                        <Box mb={4} p={3} borderWidth="1px" borderRadius="md" borderStyle="dashed">
+                            <Flex justify="space-between" align="center" mb={2}>
+                                <Text fontWeight="bold">New Item</Text>
+                                <IconButton
+                                    aria-label="Cancel"
+                                    icon={<CloseIcon />}
+                                    size="xs"
+                                    onClick={cancelAddItem}
+                                    variant="ghost"
+                                />
+                            </Flex>
+                            <HStack spacing={3} mb={2}>
+                                <FormControl>
+                                    <FormLabel fontSize="xs">Name</FormLabel>
+                                    <Input
+                                        size="sm"
+                                        value={newItem.name || ''}
+                                        onChange={(e) => setNewItem({ ...newItem, name: e.target.value })}
+                                        placeholder="Item name"
+                                    />
+                                </FormControl>
+                                <FormControl>
+                                    <FormLabel fontSize="xs">Price</FormLabel>
+                                    <NumberInput
+                                        size="sm"
+                                        value={newItem.price || 0}
+                                        onChange={(_, value) => setNewItem({ ...newItem, price: value })}
+                                        min={0}
+                                        precision={2}
+                                        step={0.01}
+                                    >
+                                        <NumberInputField />
+                                        <NumberInputStepper>
+                                            <NumberIncrementStepper />
+                                            <NumberDecrementStepper />
+                                        </NumberInputStepper>
+                                    </NumberInput>
+                                </FormControl>
+                            </HStack>
+                            <HStack spacing={3}>
+                                <FormControl>
+                                    <FormLabel fontSize="xs">Quantity</FormLabel>
+                                    <NumberInput
+                                        size="sm"
+                                        value={newItem.quantity || 1}
+                                        onChange={(_, value) => setNewItem({ ...newItem, quantity: value })}
+                                        min={1}
+                                        step={1}
+                                    >
+                                        <NumberInputField />
+                                        <NumberInputStepper>
+                                            <NumberIncrementStepper />
+                                            <NumberDecrementStepper />
+                                        </NumberInputStepper>
+                                    </NumberInput>
+                                </FormControl>
+                                <FormControl>
+                                    <FormLabel fontSize="xs">Category</FormLabel>
+                                    <Select
+                                        size="sm"
+                                        value={newItem.categoryId || ''}
+                                        onChange={(e) => setNewItem({ ...newItem, categoryId: e.target.value })}
+                                    >
+                                        {categories?.map(category => (
+                                            <option key={category.id} value={category.id}>
+                                                {category.name}
+                                            </option>
+                                        ))}
+                                    </Select>
+                                </FormControl>
+                            </HStack>
+                            <Button
+                                mt={3}
+                                size="sm"
+                                colorScheme="blue"
+                                onClick={handleAddItem}
+                                isDisabled={!newItem.name}
+                                width="full"
+                            >
+                                Add Item
+                            </Button>
+                        </Box>
+                    )}
+
+                    <Table variant="simple" size="sm">
                         <Thead>
                             <Tr>
                                 <Th>Item</Th>
@@ -157,24 +618,250 @@ const ReceiptDetail: React.FC = () => {
                                 <Th isNumeric>Quantity</Th>
                                 <Th isNumeric>Price</Th>
                                 <Th isNumeric>Total</Th>
+                                {isEditing && <Th width="80px">Actions</Th>}
                             </Tr>
                         </Thead>
                         <Tbody>
-                            {receiptData.items.map((item) => (
+                            {editedReceipt.items.map((item) => (
                                 <Tr key={item.id}>
-                                    <Td>{item.name}</Td>
                                     <Td>
-                                        <Badge colorScheme="blue">{item.category.name}</Badge>
+                                        {isEditing && editingItem === item.id ? (
+                                            <Input
+                                                size="sm"
+                                                value={item.name}
+                                                onChange={(e) => handleItemChange(item.id, 'name', e.target.value)}
+                                            />
+                                        ) : (
+                                            <Editable
+                                                isDisabled={!isEditing}
+                                                defaultValue={item.name}
+                                                onSubmit={(value) => handleItemChange(item.id, 'name', value)}
+                                            >
+                                                <EditablePreview />
+                                                <EditableInput />
+                                            </Editable>
+                                        )}
                                     </Td>
-                                    <Td isNumeric>{item.quantity}</Td>
-                                    <Td isNumeric>${item.price.toFixed(2)}</Td>
+                                    <Td>
+                                        {isEditing ? (
+                                            <Select
+                                                size="sm"
+                                                value={item.categoryId}
+                                                onChange={(e) => {
+                                                    const categoryId = e.target.value;
+                                                    const category = categories?.find(c => c.id === categoryId);
+                                                    handleItemChange(item.id, 'categoryId', categoryId);
+                                                    handleItemChange(item.id, 'category', {
+                                                        id: categoryId,
+                                                        name: category?.name || ''
+                                                    });
+                                                }}
+                                            >
+                                                {categories?.map(category => (
+                                                    <option key={category.id} value={category.id}>
+                                                        {category.name}
+                                                    </option>
+                                                ))}
+                                            </Select>
+                                        ) : (
+                                            <Badge colorScheme="blue">{item.category.name}</Badge>
+                                        )}
+                                    </Td>
+                                    <Td isNumeric>
+                                        {isEditing ? (
+                                            <NumberInput
+                                                size="sm"
+                                                value={item.quantity}
+                                                onChange={(_, value) => handleItemChange(item.id, 'quantity', value)}
+                                                min={1}
+                                                step={1}
+                                                maxW="80px"
+                                                ml="auto"
+                                            >
+                                                <NumberInputField />
+                                                <NumberInputStepper>
+                                                    <NumberIncrementStepper />
+                                                    <NumberDecrementStepper />
+                                                </NumberInputStepper>
+                                            </NumberInput>
+                                        ) : (
+                                            item.quantity
+                                        )}
+                                    </Td>
+                                    <Td isNumeric>
+                                        {isEditing ? (
+                                            <NumberInput
+                                                size="sm"
+                                                value={item.price}
+                                                onChange={(_, value) => handleItemChange(item.id, 'price', value)}
+                                                min={0}
+                                                step={0.01}
+                                                precision={2}
+                                                maxW="100px"
+                                                ml="auto"
+                                            >
+                                                <NumberInputField />
+                                                <NumberInputStepper>
+                                                    <NumberIncrementStepper />
+                                                    <NumberDecrementStepper />
+                                                </NumberInputStepper>
+                                            </NumberInput>
+                                        ) : (
+                                            `$${item.price.toFixed(2)}`
+                                        )}
+                                    </Td>
                                     <Td isNumeric>${(item.price * item.quantity).toFixed(2)}</Td>
+                                    {isEditing && (
+                                        <Td>
+                                            <HStack spacing={1} justify="flex-end">
+                                                {editingItem !== item.id && (
+                                                    <Tooltip label="Edit item">
+                                                        <IconButton
+                                                            aria-label="Edit item"
+                                                            icon={<EditIcon />}
+                                                            size="xs"
+                                                            onClick={() => setEditingItem(item.id)}
+                                                            variant="ghost"
+                                                        />
+                                                    </Tooltip>
+                                                )}
+                                                {editingItem === item.id && (
+                                                    <Tooltip label="Done editing">
+                                                        <IconButton
+                                                            aria-label="Done editing"
+                                                            icon={<CheckIcon />}
+                                                            size="xs"
+                                                            onClick={() => setEditingItem(null)}
+                                                            colorScheme="green"
+                                                            variant="ghost"
+                                                        />
+                                                    </Tooltip>
+                                                )}
+                                                <Tooltip label="Delete item">
+                                                    <IconButton
+                                                        aria-label="Delete item"
+                                                        icon={<DeleteIcon />}
+                                                        size="xs"
+                                                        onClick={() => {
+                                                            setItemToDelete(item.id);
+                                                            deleteAlertDisclosure.onOpen();
+                                                        }}
+                                                        colorScheme="red"
+                                                        variant="ghost"
+                                                    />
+                                                </Tooltip>
+                                            </HStack>
+                                        </Td>
+                                    )}
                                 </Tr>
                             ))}
                         </Tbody>
                     </Table>
                 </CardBody>
             </Card>
+
+            {/* Delete Item Confirmation */}
+            <AlertDialog
+                isOpen={deleteAlertDisclosure.isOpen}
+                leastDestructiveRef={cancelRef}
+                onClose={deleteAlertDisclosure.onClose}
+            >
+                <AlertDialogOverlay>
+                    <AlertDialogContent>
+                        <AlertDialogHeader fontSize="lg" fontWeight="bold">
+                            Delete Item
+                        </AlertDialogHeader>
+
+                        <AlertDialogBody>
+                            Are you sure you want to delete this item? This action cannot be undone.
+                        </AlertDialogBody>
+
+                        <AlertDialogFooter>
+                            <Button ref={cancelRef} onClick={deleteAlertDisclosure.onClose}>
+                                Cancel
+                            </Button>
+                            <Button
+                                colorScheme="red"
+                                onClick={() => {
+                                    if (itemToDelete) {
+                                        handleDeleteItem(itemToDelete);
+                                    }
+                                    deleteAlertDisclosure.onClose();
+                                }}
+                                ml={3}
+                            >
+                                Delete
+                            </Button>
+                        </AlertDialogFooter>
+                    </AlertDialogContent>
+                </AlertDialogOverlay>
+            </AlertDialog>
+
+            {/* Recalculate Receipt Confirmation */}
+            <AlertDialog
+                isOpen={recalculateDisclosure.isOpen}
+                leastDestructiveRef={cancelRef}
+                onClose={recalculateDisclosure.onClose}
+            >
+                <AlertDialogOverlay>
+                    <AlertDialogContent>
+                        <AlertDialogHeader fontSize="lg" fontWeight="bold">
+                            Recalculate Receipt
+                        </AlertDialogHeader>
+
+                        <AlertDialogBody>
+                            This will recalculate all receipt data from the original image. Any manual edits will be lost. Are you sure you want to continue?
+                        </AlertDialogBody>
+
+                        <AlertDialogFooter>
+                            <Button ref={cancelRef} onClick={recalculateDisclosure.onClose}>
+                                Cancel
+                            </Button>
+                            <Button
+                                colorScheme="blue"
+                                onClick={handleRecalculateReceipt}
+                                ml={3}
+                                isLoading={recalculateReceiptMutation.isPending}
+                            >
+                                Recalculate
+                            </Button>
+                        </AlertDialogFooter>
+                    </AlertDialogContent>
+                </AlertDialogOverlay>
+            </AlertDialog>
+
+            {/* Delete Receipt Confirmation */}
+            <AlertDialog
+                isOpen={deleteReceiptDisclosure.isOpen}
+                leastDestructiveRef={cancelRef}
+                onClose={deleteReceiptDisclosure.onClose}
+            >
+                <AlertDialogOverlay>
+                    <AlertDialogContent>
+                        <AlertDialogHeader fontSize="lg" fontWeight="bold">
+                            Delete Receipt
+                        </AlertDialogHeader>
+
+                        <AlertDialogBody>
+                            Are you sure you want to delete this entire receipt? This action cannot be undone.
+                        </AlertDialogBody>
+
+                        <AlertDialogFooter>
+                            <Button ref={cancelRef} onClick={deleteReceiptDisclosure.onClose}>
+                                Cancel
+                            </Button>
+                            <Button
+                                colorScheme="red"
+                                onClick={handleDeleteReceipt}
+                                ml={3}
+                                isLoading={deleteReceiptMutation.isPending}
+                            >
+                                Delete
+                            </Button>
+                        </AlertDialogFooter>
+                    </AlertDialogContent>
+                </AlertDialogOverlay>
+            </AlertDialog>
         </VStack>
     );
 };
