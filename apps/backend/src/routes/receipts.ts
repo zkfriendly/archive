@@ -65,6 +65,18 @@ const receiptUpdateSchema = z.object({
     })),
 });
 
+// Schema for manual receipt data
+const manualReceiptSchema = z.object({
+    date: z.string(),
+    shopName: z.string(),
+    items: z.array(z.object({
+        name: z.string(),
+        price: z.number(),
+        categoryId: z.string().optional(),
+    })),
+    totalAmount: z.number(),
+});
+
 // Process receipt image and extract data
 async function processReceiptImage(imagePath: string) {
     const worker = await createWorker();
@@ -645,6 +657,92 @@ router.post('/:id/recalculate', async (req, res) => {
     } catch (error) {
         console.error('Error recalculating receipt:', error);
         res.status(500).json({ error: 'Failed to recalculate receipt' });
+    }
+});
+
+// Create receipt manually
+router.post('/manual', async (req, res) => {
+    try {
+        // Validate the request body
+        const validationResult = manualReceiptSchema.safeParse(req.body);
+        if (!validationResult.success) {
+            return res.status(400).json({
+                error: 'Invalid request data',
+                details: validationResult.error.format()
+            });
+        }
+
+        const manualData = validationResult.data;
+
+        // Find or create shop
+        let shop = null;
+        if (manualData.shopName) {
+            shop = await prisma.shop.findUnique({
+                where: { name: manualData.shopName }
+            });
+
+            if (!shop) {
+                shop = await prisma.shop.create({
+                    data: {
+                        name: manualData.shopName
+                    }
+                });
+            }
+        }
+
+        // Create receipt with items
+        const receipt = await prisma.receipt.create({
+            data: {
+                date: new Date(manualData.date),
+                totalAmount: manualData.totalAmount,
+                imageUrl: '', // No image for manual entries
+                rawImagePath: '', // No raw image for manual entries
+                shop: shop ? {
+                    connect: { id: shop.id }
+                } : undefined,
+                items: {
+                    create: await Promise.all(manualData.items.map(async (item) => {
+                        // If no categoryId is provided, use "Other" category
+                        let categoryId = item.categoryId;
+
+                        if (!categoryId) {
+                            // Find or create "Other" category
+                            let otherCategory = await prisma.category.findFirst({
+                                where: { name: 'Other' }
+                            });
+
+                            if (!otherCategory) {
+                                otherCategory = await prisma.category.create({
+                                    data: { name: 'Other' }
+                                });
+                            }
+
+                            categoryId = otherCategory.id;
+                        }
+
+                        return {
+                            name: item.name,
+                            price: item.price,
+                            quantity: 1, // Default quantity for manual entries
+                            categoryId: categoryId,
+                        };
+                    })),
+                },
+            },
+            include: {
+                items: {
+                    include: {
+                        category: true,
+                    },
+                },
+                shop: true,
+            },
+        });
+
+        res.status(201).json(receipt);
+    } catch (error) {
+        console.error('Error creating manual receipt:', error);
+        res.status(500).json({ error: 'Failed to create manual receipt' });
     }
 });
 

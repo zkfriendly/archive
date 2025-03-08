@@ -49,9 +49,16 @@ import {
     AlertIcon,
     AlertTitle,
     AlertDescription,
+    Modal,
+    ModalOverlay,
+    ModalContent,
+    ModalHeader,
+    ModalBody,
+    ModalFooter,
+    ModalCloseButton,
 } from '@chakra-ui/react';
 import { useDropzone } from 'react-dropzone';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import {
     FiUpload,
@@ -98,6 +105,7 @@ const UploadReceipt = () => {
     const [isUploading, setIsUploading] = useState(false);
     const [activeTab, setActiveTab] = useState(0);
     const toast = useToast();
+    const queryClient = useQueryClient();
     const bgColor = useColorModeValue('white', 'gray.700');
     const borderColor = useColorModeValue('gray.100', 'gray.600');
     const textColor = useColorModeValue('gray.600', 'gray.300');
@@ -105,6 +113,11 @@ const UploadReceipt = () => {
     const subheadingColor = useColorModeValue('gray.700', 'gray.100');
     const mutedColor = useColorModeValue('gray.500', 'gray.400');
     const { isOpen: isHelpOpen, onToggle: onHelpToggle } = useDisclosure();
+
+    // For new category creation
+    const [newCategoryName, setNewCategoryName] = useState('');
+    const [creatingCategoryForItemIndex, setCreatingCategoryForItemIndex] = useState<number | null>(null);
+    const { isOpen: isNewCategoryModalOpen, onOpen: openNewCategoryModal, onClose: closeNewCategoryModal } = useDisclosure();
 
     // For manual entry
     const [manualReceipt, setManualReceipt] = useState<ManualReceipt>({
@@ -124,6 +137,56 @@ const UploadReceipt = () => {
             return response.data;
         },
     });
+
+    // Create category mutation
+    const createCategoryMutation = useMutation({
+        mutationFn: async (name: string) => {
+            const response = await axios.post('/api/categories', { name });
+            return response.data;
+        },
+        onSuccess: (data) => {
+            // Invalidate categories query to refresh the list
+            queryClient.invalidateQueries({ queryKey: ['categories'] });
+
+            toast({
+                title: 'Category created',
+                status: 'success',
+                duration: 2000,
+            });
+
+            // If we have an item index, update that item with the new category
+            if (creatingCategoryForItemIndex !== null && manualReceipt.items[creatingCategoryForItemIndex]) {
+                handleItemChange(creatingCategoryForItemIndex, 'categoryId', data.id);
+            }
+
+            // Reset state
+            setNewCategoryName('');
+            setCreatingCategoryForItemIndex(null);
+            closeNewCategoryModal();
+        },
+        onError: (error) => {
+            toast({
+                title: 'Failed to create category',
+                description: error instanceof Error ? error.message : 'Please try again',
+                status: 'error',
+                duration: 3000,
+            });
+        },
+    });
+
+    // Function to handle opening the new category modal
+    const handleOpenNewCategoryModal = (itemIndex: number) => {
+        setCreatingCategoryForItemIndex(itemIndex);
+        setNewCategoryName('');
+        openNewCategoryModal();
+    };
+
+    // Function to handle creating a new category
+    const handleCreateCategory = () => {
+        if (newCategoryName.trim()) {
+            createCategoryMutation.mutate(newCategoryName.trim());
+        }
+    };
 
     const uploadMutation = useMutation({
         mutationFn: async (file: File) => {
@@ -210,6 +273,13 @@ const UploadReceipt = () => {
 
     const handleItemChange = (index: number, field: keyof ReceiptItem, value: string | number) => {
         const updatedItems = [...manualReceipt.items];
+
+        // If selecting "create-new" category, open the modal
+        if (field === 'categoryId' && value === 'create-new') {
+            handleOpenNewCategoryModal(index);
+            return;
+        }
+
         updatedItems[index] = { ...updatedItems[index], [field]: value };
 
         // Recalculate total
@@ -689,13 +759,28 @@ const UploadReceipt = () => {
                                                                                 onChange={(e) => handleItemChange(index, 'categoryId', e.target.value)}
                                                                                 borderRadius="lg"
                                                                                 pl="2.5rem"
+                                                                                bg={bgColor}
                                                                             >
                                                                                 {categories?.map((category) => (
                                                                                     <option key={category.id} value={category.id}>
                                                                                         {category.name}
                                                                                     </option>
                                                                                 ))}
+                                                                                <option value="create-new" style={{ color: 'blue', fontWeight: 'bold' }}>+ Create new category</option>
                                                                             </Select>
+                                                                            <Tooltip label="Create new category" placement="top">
+                                                                                <InputRightElement width="4.5rem">
+                                                                                    <Button
+                                                                                        h="1.75rem"
+                                                                                        size="sm"
+                                                                                        onClick={() => handleOpenNewCategoryModal(index)}
+                                                                                        variant="ghost"
+                                                                                        colorScheme="blue"
+                                                                                    >
+                                                                                        <Icon as={FiPlus} />
+                                                                                    </Button>
+                                                                                </InputRightElement>
+                                                                            </Tooltip>
                                                                         </InputGroup>
                                                                     </FormControl>
                                                                 </GridItem>
@@ -769,6 +854,50 @@ const UploadReceipt = () => {
                     </Tabs>
                 </CardBody>
             </Card>
+
+            {/* New Category Modal */}
+            <Modal isOpen={isNewCategoryModalOpen} onClose={closeNewCategoryModal} initialFocusRef={{ current: null }}>
+                <ModalOverlay />
+                <ModalContent>
+                    <ModalHeader>Create New Category</ModalHeader>
+                    <ModalCloseButton />
+                    <ModalBody pb={6}>
+                        <Text mb={4} color={mutedColor}>
+                            Create a new category that will be available for all your expenses.
+                        </Text>
+                        <FormControl>
+                            <FormLabel color={subheadingColor}>Category Name</FormLabel>
+                            <Input
+                                value={newCategoryName}
+                                onChange={(e) => setNewCategoryName(e.target.value)}
+                                placeholder="Enter category name"
+                                autoFocus
+                                bg={bgColor}
+                                borderRadius="lg"
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter' && newCategoryName.trim()) {
+                                        handleCreateCategory();
+                                    }
+                                }}
+                            />
+                        </FormControl>
+                    </ModalBody>
+                    <ModalFooter>
+                        <Button
+                            colorScheme="blue"
+                            mr={3}
+                            onClick={handleCreateCategory}
+                            isLoading={createCategoryMutation.isPending}
+                            isDisabled={!newCategoryName.trim()}
+                            leftIcon={<FiPlus />}
+                            borderRadius="lg"
+                        >
+                            Create Category
+                        </Button>
+                        <Button variant="ghost" onClick={closeNewCategoryModal} borderRadius="lg">Cancel</Button>
+                    </ModalFooter>
+                </ModalContent>
+            </Modal>
         </Box>
     );
 };
