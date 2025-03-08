@@ -263,6 +263,9 @@ const ReceiptDetail: React.FC = () => {
                 clearTimeout(saveTimeout);
                 setSaveTimeout(null);
             }
+
+            // Reset the saving state
+            setIsSaving(false);
         } else {
             // Start editing
             setIsEditing(true);
