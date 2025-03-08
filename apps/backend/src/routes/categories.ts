@@ -1,8 +1,7 @@
 import express from 'express';
-import { PrismaClient } from '@prisma/client';
+import prisma from '../services/db';
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 // Get all categories
 router.get('/', async (req, res) => {
@@ -60,7 +59,7 @@ router.post('/', async (req, res) => {
         });
 
         res.status(201).json(category);
-    } catch (error) {
+    } catch (error: any) {
         if (error.code === 'P2002') {
             return res.status(400).json({ error: 'Category name already exists' });
         }
@@ -83,7 +82,7 @@ router.put('/:id', async (req, res) => {
         });
 
         res.json(category);
-    } catch (error) {
+    } catch (error: any) {
         if (error.code === 'P2002') {
             return res.status(400).json({ error: 'Category name already exists' });
         }
@@ -102,7 +101,7 @@ router.delete('/:id', async (req, res) => {
         });
 
         res.status(204).send();
-    } catch (error) {
+    } catch (error: any) {
         if (error.code === 'P2025') {
             return res.status(404).json({ error: 'Category not found' });
         }

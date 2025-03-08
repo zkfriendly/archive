@@ -1,18 +1,10 @@
 import express from 'express';
-import { PrismaClient } from '@prisma/client';
-import { Anthropic } from '@anthropic-ai/sdk';
-import { z } from 'zod';
+import prisma from '../services/db';
+import anthropic from '../services/ai/client';
+import { querySchema } from '../services/schemas';
+import { ZodError } from 'zod';
 
 const router = express.Router();
-const prisma = new PrismaClient();
-const anthropic = new Anthropic({
-    apiKey: process.env.ANTHROPIC_API_KEY,
-});
-
-// Schema for query request
-const querySchema = z.object({
-    query: z.string().min(1),
-});
 
 // Process natural language query
 router.post('/', async (req, res) => {
@@ -69,7 +61,7 @@ router.post('/', async (req, res) => {
 
         res.json(response);
     } catch (error) {
-        if (error instanceof z.ZodError) {
+        if (error instanceof ZodError) {
             return res.status(400).json({ error: 'Invalid query format' });
         }
         console.error('Error processing query:', error);
